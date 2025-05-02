@@ -6,15 +6,14 @@ app = Flask(__name__)
 def health_check():
     return "OK", 200
 
-
 @app.route("/analyze_venue", methods=["POST"])
 def analyze_venue():
     data = request.json
 
     try:
         cpa = float(data["CPA"])
-        fulfillment = float(data["Fulfillment_Percent"])
-        attendance = float(data["Attendance_Rate"])
+        fulfillment = float(data["Fulfillment_Percent"].replace("%", ""))
+        attendance = float(data["Attendance_Rate"].replace("%", ""))
 
         score = (1 / cpa) * 0.5 + fulfillment * 0.3 + attendance * 0.2
         score *= 40
@@ -30,3 +29,4 @@ def analyze_venue():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
+
