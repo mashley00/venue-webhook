@@ -3,13 +3,15 @@ import pandas as pd
 
 app = Flask(__name__)
 
-# Use the new Google Sheets CSV export link
+# ✅ Update with your published Google Sheet CSV URL
 CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR_ohhyjy3dRXiuMUHzIs4Uww1AdkXfwIEBBDjnh57povZyLs6F0aXyLAI-1QkhUcyASUPfAkyl4H9K/pub?gid=0&single=true&output=csv"
 
+# ✅ Health check
 @app.route("/", methods=["GET"])
 def health_check():
     return "OK", 200
 
+# ✅ Analyze venue by manual input (used by Zapier)
 @app.route("/analyze_venue", methods=["POST"])
 def analyze_venue():
     data = request.json
@@ -30,6 +32,7 @@ def analyze_venue():
         "recommended_time_2": "6:30 PM Tuesday"
     })
 
+# ✅ VOR endpoint for topic/city/state/radius input
 @app.route("/vor", methods=["POST"])
 def vor():
     try:
@@ -39,22 +42,22 @@ def vor():
         state = payload["state"].strip().upper()
         radius = float(payload["radius"])
 
-        # Load CSV from Google Sheets
+        # Load and prepare data
         df = pd.read_csv(CSV_URL)
         df.columns = [col.strip() for col in df.columns]
 
-        # Filter for topic, city, state, and radius
+        # Filter by topic, city, state, radius
         df = df[
-            (df['Topic'].str.upper().str.strip() == topic) &
-            (df['City'].str.upper().str.strip() == city) &
-            (df['State'].str.upper().str.strip() == state) &
-            (df['Miles from Center'] <= radius)
+            (df["Topic"].str.upper().str.strip() == topic) &
+            (df["City"].str.upper().str.strip() == city) &
+            (df["State"].str.upper().str.strip() == state) &
+            (df["Miles from Center"] <= radius)
         ].copy()
 
         if df.empty:
             return jsonify({"message": "No matching venues found"}), 404
 
-        # Clean and calculate score
+        # Convert and score
         df["CPA_float"] = pd.to_numeric(df["Cost per Verified HH"], errors="coerce")
         df["Fulfillment"] = pd.to_numeric(df["Fulfillment %"], errors="coerce")
         df["Attendance"] = pd.to_numeric(df["Attendance Rate"], errors="coerce")
@@ -63,12 +66,13 @@ def vor():
         df["score"] = (1 / df["CPA_float"]) * 0.5 + df["Fulfillment"] * 0.3 + df["Attendance"] * 0.2
         df["score"] = df["score"] * 40
 
+        # Top venues
         top_venues = df.sort_values("score", ascending=False).head(4)
 
         result = []
         for _, row in top_venues.iterrows():
             result.append({
-                "venue": row.get("Venue", ""),
+                "venue": row["Venue"],
                 "score": round(row["score"], 2),
                 "recommended_time_1": "11:00 AM Monday",
                 "recommended_time_2": "6:30 PM Tuesday",
