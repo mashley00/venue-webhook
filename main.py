@@ -3,7 +3,15 @@ import pandas as pd
 
 app = Flask(__name__)
 
+# ✅ Google Sheet URL as CSV
 CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR_ohhyjy3dRXiuMUHzIs4Uww1AdkXfwIEBBDjnh57povZyLs6F0aXyLAI-1QkhUcyASUPfAkyl4H9K/pub?gid=0&single=true&output=csv"
+
+# ✅ Map topic shorthand to actual values in data
+TOPIC_MAP = {
+    "TIR": "taxes_in_retirement_567",
+    "SS": "social_security_567",
+    "EP": "estate_planning_567"
+}
 
 @app.route("/", methods=["GET"])
 def health_check():
@@ -32,29 +40,34 @@ def analyze_venue():
 def vor():
     try:
         payload = request.json
-        topic = payload["topic"].strip().upper()
+        input_topic = payload["topic"].strip().upper()
         city = payload["city"].strip().upper()
         state = payload["state"].strip().upper()
 
-        # Load and clean data
+        topic = TOPIC_MAP.get(input_topic)
+        if not topic:
+            return jsonify({"error": f"Unsupported topic '{input_topic}'"}), 400
+
+        # Load and prepare data
         df = pd.read_csv(CSV_URL)
         df.columns = [col.strip() for col in df.columns]
 
-        # Filter by topic, city, state (NO radius filtering)
+        # Filter by topic, city, state
         df = df[
-            (df["Topic"].str.upper().str.strip() == topic) &
-            (df["City"].str.upper().str.strip() == city) &
-            (df["State"].str.upper().str.strip() == state)
+            (df["Topic"].str.strip().str.lower() == topic.lower()) &
+            (df["City"].str.strip().str.upper() == city) &
+            (df["State"].str.strip().str.upper() == state)
         ].copy()
 
         if df.empty:
             return jsonify({"message": "No matching venues found"}), 404
 
-        # Score calculation
+        # Scoring logic
         df["CPA_float"] = pd.to_numeric(df["Cost per Verified HH"], errors="coerce")
         df["Fulfillment"] = pd.to_numeric(df["Fulfillment %"], errors="coerce")
         df["Attendance"] = pd.to_numeric(df["Attendance Rate"], errors="coerce")
         df = df.dropna(subset=["CPA_float", "Fulfillment", "Attendance"])
+
         df["score"] = (1 / df["CPA_float"]) * 0.5 + df["Fulfillment"] * 0.3 + df["Attendance"] * 0.2
         df["score"] = df["score"] * 40
 
@@ -82,6 +95,7 @@ def vor():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
+
 
 
 
