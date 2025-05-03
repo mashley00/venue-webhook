@@ -3,7 +3,6 @@ import pandas as pd
 
 app = Flask(__name__)
 
-# Google Sheet as CSV (Published to web, ensure public access)
 CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR_ohhyjy3dRXiuMUHzIs4Uww1AdkXfwIEBBDjnh57povZyLs6F0aXyLAI-1QkhUcyASUPfAkyl4H9K/pub?gid=0&single=true&output=csv"
 
 @app.route("/", methods=["GET"])
@@ -13,7 +12,6 @@ def health_check():
 @app.route("/analyze_venue", methods=["POST"])
 def analyze_venue():
     data = request.json
-
     try:
         cpa = float(data["CPA"])
         fulfillment = float(data["Fulfillment_Percent"].replace("%", "").strip())
@@ -21,7 +19,7 @@ def analyze_venue():
         score = (1 / cpa) * 0.5 + fulfillment * 0.3 + attendance * 0.2
         score *= 40
     except Exception as e:
-        return jsonify({"error": "Invalid input for scoring", "details": str(e)}), 400
+        return jsonify({"error": "Invalid input", "details": str(e)}), 400
 
     return jsonify({
         "venue": data.get("Venue", "Unknown"),
@@ -37,42 +35,26 @@ def vor():
         topic = payload["topic"].strip().upper()
         city = payload["city"].strip().upper()
         state = payload["state"].strip().upper()
-        radius = float(payload["radius"])
 
-        # Load CSV
-        try:
-            df = pd.read_csv(CSV_URL)
-        except Exception as e:
-            return jsonify({"error": "Failed to load CSV", "details": str(e)}), 500
-
+        # Load and clean data
+        df = pd.read_csv(CSV_URL)
         df.columns = [col.strip() for col in df.columns]
 
-        required_cols = ["Topic", "City", "State", "Miles from Center", "Cost per Verified HH", "Fulfillment %", "Attendance Rate"]
-        for col in required_cols:
-            if col not in df.columns:
-                return jsonify({"error": f"Missing column in data: {col}"}), 500
-
-        # Filter by criteria
+        # Filter by topic, city, state (NO radius filtering)
         df = df[
             (df["Topic"].str.upper().str.strip() == topic) &
             (df["City"].str.upper().str.strip() == city) &
-            (df["State"].str.upper().str.strip() == state) &
-            (df["Miles from Center"] <= radius)
+            (df["State"].str.upper().str.strip() == state)
         ].copy()
 
         if df.empty:
-            return jsonify({"message": "No matching venues found after filters"}), 404
+            return jsonify({"message": "No matching venues found"}), 404
 
-        # Parse metrics
+        # Score calculation
         df["CPA_float"] = pd.to_numeric(df["Cost per Verified HH"], errors="coerce")
         df["Fulfillment"] = pd.to_numeric(df["Fulfillment %"], errors="coerce")
         df["Attendance"] = pd.to_numeric(df["Attendance Rate"], errors="coerce")
-
         df = df.dropna(subset=["CPA_float", "Fulfillment", "Attendance"])
-        if df.empty:
-            return jsonify({"error": "All rows dropped after NaN filtering"}), 500
-
-        # Scoring
         df["score"] = (1 / df["CPA_float"]) * 0.5 + df["Fulfillment"] * 0.3 + df["Attendance"] * 0.2
         df["score"] = df["score"] * 40
 
@@ -81,8 +63,8 @@ def vor():
         result = []
         for _, row in top_venues.iterrows():
             result.append({
-                "venue": row.get("Venue", ""),
-                "score": round(row.get("score", 0), 2),
+                "venue": row["Venue"],
+                "score": round(row["score"], 2),
                 "recommended_time_1": "11:00 AM Monday",
                 "recommended_time_2": "6:30 PM Tuesday",
                 "event_date": row.get("Event Date", ""),
@@ -96,10 +78,11 @@ def vor():
         return jsonify(result)
 
     except Exception as e:
-        return jsonify({"error": "Unexpected failure in /vor", "details": str(e)}), 500
+        return jsonify({"error": "Failed to process VOR", "details": str(e)}), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
+
 
 
 
