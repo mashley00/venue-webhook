@@ -3,8 +3,9 @@ import pandas as pd
 
 app = Flask(__name__)
 
-# ✅ Google Sheets CSV Export Link (TIR/EP/SS Master Sheet)
+# ✅ Your new Google Sheet CSV export URL
 CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR_ohhyjy3dRXiuMUHzIs4Uww1AdkXfwIEBBDjnh57povZyLs6F0aXyLAI-1QkhUcyASUPfAkyl4H9K/pub?gid=0&single=true&output=csv"
+
 @app.route("/", methods=["GET"])
 def health_check():
     return "OK", 200
@@ -38,14 +39,15 @@ def vor():
         state = payload["state"].strip().upper()
         radius = float(payload["radius"])
 
-        # ✅ Load directly from Google Sheets CSV export
+        # ✅ Load CSV from Google Sheets
         df = pd.read_csv(CSV_URL)
         df.columns = [col.strip() for col in df.columns]
 
+        # ✅ Filter based on topic, city, state, and radius
         df = df[
-            (df['Topic'].str.upper().str.strip() == topic
+            (df['Topic'].str.upper().str.strip() == topic) &
+            (df['City'].str.upper().str.strip() == city) &
+            (df['State'].str.upper().str.strip() == state) &
+            (df['Miles from Center'] <=
 
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
 
