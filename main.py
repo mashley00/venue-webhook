@@ -3,7 +3,7 @@ import pandas as pd
 
 app = Flask(__name__)
 
-# ✅ Your new Google Sheet CSV export URL
+# Use the new Google Sheets CSV export link
 CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR_ohhyjy3dRXiuMUHzIs4Uww1AdkXfwIEBBDjnh57povZyLs6F0aXyLAI-1QkhUcyASUPfAkyl4H9K/pub?gid=0&single=true&output=csv"
 
 @app.route("/", methods=["GET"])
@@ -13,11 +13,11 @@ def health_check():
 @app.route("/analyze_venue", methods=["POST"])
 def analyze_venue():
     data = request.json
+
     try:
         cpa = float(data["CPA"])
         fulfillment = float(data["Fulfillment_Percent"].replace("%", "").strip())
         attendance = float(data["Attendance_Rate"].replace("%", "").strip())
-
         score = (1 / cpa) * 0.5 + fulfillment * 0.3 + attendance * 0.2
         score *= 40
     except Exception as e:
@@ -39,11 +39,11 @@ def vor():
         state = payload["state"].strip().upper()
         radius = float(payload["radius"])
 
-        # ✅ Load CSV from Google Sheets
+        # Load CSV from Google Sheets
         df = pd.read_csv(CSV_URL)
         df.columns = [col.strip() for col in df.columns]
 
-        # ✅ Filter based on topic, city, state, and radius
+        # Filter for topic, city, state, and radius
         df = df[
             (df['Topic'].str.upper().str.strip() == topic) &
             (df['City'].str.upper().str.strip() == city) &
@@ -54,17 +54,15 @@ def vor():
         if df.empty:
             return jsonify({"message": "No matching venues found"}), 404
 
-        # ✅ Convert scoring columns
+        # Clean and calculate score
         df["CPA_float"] = pd.to_numeric(df["Cost per Verified HH"], errors="coerce")
         df["Fulfillment"] = pd.to_numeric(df["Fulfillment %"], errors="coerce")
         df["Attendance"] = pd.to_numeric(df["Attendance Rate"], errors="coerce")
         df = df.dropna(subset=["CPA_float", "Fulfillment", "Attendance"])
 
-        # ✅ Score calculation
         df["score"] = (1 / df["CPA_float"]) * 0.5 + df["Fulfillment"] * 0.3 + df["Attendance"] * 0.2
-        df["score"] *= 40
+        df["score"] = df["score"] * 40
 
-        # ✅ Return top 4
         top_venues = df.sort_values("score", ascending=False).head(4)
 
         result = []
@@ -85,10 +83,11 @@ def vor():
         return jsonify(result)
 
     except Exception as e:
-        return jsonify({"error": "VOR failed", "details": str(e)}), 500
+        return jsonify({"error": "Failed to process VOR", "details": str(e)}), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
+
 
 
 
