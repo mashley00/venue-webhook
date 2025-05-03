@@ -48,6 +48,47 @@ def vor():
             (df['Topic'].str.upper().str.strip() == topic) &
             (df['City'].str.upper().str.strip() == city) &
             (df['State'].str.upper().str.strip() == state) &
-            (df['Miles from Center'] <=
+            (df['Miles from Center'] <= radius)
+        ].copy()
+
+        if df.empty:
+            return jsonify({"message": "No matching venues found"}), 404
+
+        # ✅ Convert scoring columns
+        df["CPA_float"] = pd.to_numeric(df["Cost per Verified HH"], errors="coerce")
+        df["Fulfillment"] = pd.to_numeric(df["Fulfillment %"], errors="coerce")
+        df["Attendance"] = pd.to_numeric(df["Attendance Rate"], errors="coerce")
+        df = df.dropna(subset=["CPA_float", "Fulfillment", "Attendance"])
+
+        # ✅ Score calculation
+        df["score"] = (1 / df["CPA_float"]) * 0.5 + df["Fulfillment"] * 0.3 + df["Attendance"] * 0.2
+        df["score"] *= 40
+
+        # ✅ Return top 4
+        top_venues = df.sort_values("score", ascending=False).head(4)
+
+        result = []
+        for _, row in top_venues.iterrows():
+            result.append({
+                "venue": row.get("Venue", ""),
+                "score": round(row["score"], 2),
+                "recommended_time_1": "11:00 AM Monday",
+                "recommended_time_2": "6:30 PM Tuesday",
+                "event_date": row.get("Event Date", ""),
+                "event_time": row.get("Event Time", ""),
+                "job_number": row.get("Job Number", ""),
+                "CPA": row.get("Cost per Verified HH", ""),
+                "fulfillment_percent": row.get("Fulfillment %", ""),
+                "attendance_rate": row.get("Attendance Rate", "")
+            })
+
+        return jsonify(result)
+
+    except Exception as e:
+        return jsonify({"error": "VOR failed", "details": str(e)}), 500
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=8080)
+
 
 
