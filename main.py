@@ -3,10 +3,10 @@ import pandas as pd
 
 app = Flask(__name__)
 
-# ✅ Google Sheet URL as CSV
+# ✅ Live Google Sheets CSV export URL
 CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR_ohhyjy3dRXiuMUHzIs4Uww1AdkXfwIEBBDjnh57povZyLs6F0aXyLAI-1QkhUcyASUPfAkyl4H9K/pub?gid=0&single=true&output=csv"
 
-# ✅ Map topic shorthand to actual values in data
+# ✅ Topic mapping
 TOPIC_MAP = {
     "TIR": "taxes_in_retirement_567",
     "SS": "social_security_567",
@@ -20,6 +20,7 @@ def health_check():
 @app.route("/analyze_venue", methods=["POST"])
 def analyze_venue():
     data = request.json
+
     try:
         cpa = float(data["CPA"])
         fulfillment = float(data["Fulfillment_Percent"].replace("%", "").strip())
@@ -40,35 +41,53 @@ def analyze_venue():
 def vor():
     try:
         payload = request.json
-        input_topic = payload["topic"].strip().upper()
+        topic = payload["topic"].strip().upper()
         city = payload["city"].strip().upper()
         state = payload["state"].strip().upper()
 
-        topic = TOPIC_MAP.get(input_topic)
-        if not topic:
-            return jsonify({"error": f"Unsupported topic '{input_topic}'"}), 400
+        topic_value = TOPIC_MAP.get(topic)
+        if not topic_value:
+            return jsonify({"error": f"Invalid topic code: {topic}"}), 400
 
-        # Load and prepare data
+        # Load and clean data
         df = pd.read_csv(CSV_URL)
-        df.columns = [col.strip() for col in df.columns]
+        df.columns = [col.strip().lower() for col in df.columns]
 
-        # Filter by topic, city, state
+        # Rename for uniformity
+        df.rename(columns={
+            "cost per verified hh": "cpa",
+            "fulfillment %": "fulfillment",
+            "attendance rate": "attendance",
+            "attended hh": "attended",
+            "registration max": "reg_max",
+            "venue image allowed": "image_allowed",
+            "disclosure required": "disclosure_needed"
+        }, inplace=True)
+
+        # Filter
         df = df[
-            (df["Topic"].str.strip().str.lower() == topic.lower()) &
-            (df["City"].str.strip().str.upper() == city) &
-            (df["State"].str.strip().str.upper() == state)
+            (df["topic"].str.lower().str.strip() == topic_value.lower()) &
+            (df["city"].str.lower().str.strip() == city.lower()) &
+            (df["state"].str.lower().str.strip() == state.lower())
         ].copy()
 
         if df.empty:
             return jsonify({"message": "No matching venues found"}), 404
 
-        # Scoring logic
-        df["CPA_float"] = pd.to_numeric(df["Cost per Verified HH"], errors="coerce")
-        df["Fulfillment"] = pd.to_numeric(df["Fulfillment %"], errors="coerce")
-        df["Attendance"] = pd.to_numeric(df["Attendance Rate"], errors="coerce")
-        df = df.dropna(subset=["CPA_float", "Fulfillment", "Attendance"])
+        # Calculate Fulfillment % if not present
+        if "fulfillment" not in df or df["fulfillment"].isnull().all():
+            if "attended" in df and "reg_max" in df:
+                df["fulfillment"] = df["attended"] / (df["reg_max"] / 2.4)
 
-        df["score"] = (1 / df["CPA_float"]) * 0.5 + df["Fulfillment"] * 0.3 + df["Attendance"] * 0.2
+        # Clean % strings
+        df["fulfillment"] = df["fulfillment"].astype(str).str.replace("%", "").astype(float)
+        df["attendance"] = df["attendance"].astype(str).str.replace("%", "").astype(float)
+        df["cpa"] = pd.to_numeric(df["cpa"], errors="coerce")
+
+        df = df.dropna(subset=["cpa", "fulfillment", "attendance"])
+
+        # Score
+        df["score"] = (1 / df["cpa"]) * 0.5 + df["fulfillment"] * 0.3 + df["attendance"] * 0.2
         df["score"] = df["score"] * 40
 
         top_venues = df.sort_values("score", ascending=False).head(4)
@@ -76,16 +95,18 @@ def vor():
         result = []
         for _, row in top_venues.iterrows():
             result.append({
-                "venue": row["Venue"],
+                "venue": row.get("venue", ""),
                 "score": round(row["score"], 2),
                 "recommended_time_1": "11:00 AM Monday",
                 "recommended_time_2": "6:30 PM Tuesday",
-                "event_date": row.get("Event Date", ""),
-                "event_time": row.get("Event Time", ""),
-                "job_number": row.get("Job Number", ""),
-                "CPA": row.get("Cost per Verified HH", ""),
-                "fulfillment_percent": row.get("Fulfillment %", ""),
-                "attendance_rate": row.get("Attendance Rate", "")
+                "event_date": row.get("event date", ""),
+                "event_time": row.get("event time", ""),
+                "job_number": row.get("job number", ""),
+                "CPA": row.get("cpa", ""),
+                "fulfillment_percent": f"{round(row['fulfillment'], 2)}%",
+                "attendance_rate": f"{round(row['attendance'], 2)}%",
+                "image_allowed": row.get("image_allowed", ""),
+                "disclosure_needed": row.get("disclosure_needed", "")
             })
 
         return jsonify(result)
@@ -95,6 +116,7 @@ def vor():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
+
 
 
 
