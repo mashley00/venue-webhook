@@ -3,89 +3,97 @@ import pandas as pd
 
 app = Flask(__name__)
 
-CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR_ohhyjy3dRXiuMUHzIs4Uww1AdkXfwIEBBDjnh57povZyLs6F0aXyLAI-1QkhUcyASUPfAkyl4H9K/pub?gid=0&single=true&output=csv"
-
-TOPIC_MAP = {
-    "TIR": "taxes_in_retirement_567",
-    "SS": "social_security_567",
-    "EP": "estate_planning_567"
-}
+# Path to the locally hosted CSV
+CSV_PATH = "data/AllEvents.csv"
 
 @app.route("/", methods=["GET"])
 def health_check():
     return "OK", 200
 
+@app.route("/score_manual", methods=["POST"])
+def score_manual():
+    data = request.json
+    try:
+        cpa = float(data["CPA"])
+        fulfillment = float(data["Fulfillment_Percent"].replace("%", "").strip())
+        attendance = float(data["Attendance_Rate"].replace("%", "").strip())
+        score = (1 / cpa) * 0.5 + fulfillment * 0.3 + attendance * 0.2
+        score *= 40
+    except Exception as e:
+        return jsonify({"error": "Invalid input", "details": str(e)}), 400
+
+    return jsonify({
+        "venue": data.get("Venue", "Unknown"),
+        "score": round(score, 2),
+        "recommended_time_1": "11:00 AM Monday",
+        "recommended_time_2": "6:30 PM Tuesday"
+    })
+
 @app.route("/vor", methods=["POST"])
 def vor():
     try:
         payload = request.json
-        topic_code = payload["topic"].strip().upper()
-        city = payload["city"].strip().lower()
-        state = payload["state"].strip().lower()
-        topic_value = TOPIC_MAP.get(topic_code)
+        topic = payload["topic"].strip().upper()
+        city = payload["city"].strip().upper()
+        state = payload["state"].strip().upper()
 
-        if not topic_value:
-            return jsonify({"error": f"Invalid topic code '{topic_code}'"}), 400
+        # Topic normalization
+        topic_map = {
+            "TIR": "TAXES_IN_RETIREMENT_567",
+            "EP": "ESTATE_PLANNING_567",
+            "SS": "SOCIAL_SECURITY_567"
+        }
+        mapped_topic = topic_map.get(topic, topic)
 
-        df = pd.read_csv(CSV_URL)
-        df.columns = [col.strip().lower().replace(" ", "_") for col in df.columns]
+        df = pd.read_csv(CSV_PATH)
+        df.columns = [col.strip() for col in df.columns]
 
-        # Ensure required columns exist
-        required = {"cpa", "attendance_rate", "fulfillment_percent", "topic", "city", "state"}
-        if not required.issubset(set(df.columns)):
-            return jsonify({"error": "Missing required columns", "details": list(df.columns)}), 500
-
-        # Filter by city/state/topic
+        # Filter by topic, city, state
         df = df[
-            (df["topic"].str.strip().str.lower() == topic_value.lower()) &
-            (df["city"].str.strip().str.lower() == city) &
-            (df["state"].str.strip().str.lower() == state)
+            (df["Topic"].str.upper().str.strip() == mapped_topic) &
+            (df["City"].str.upper().str.strip() == city) &
+            (df["State"].str.upper().str.strip() == state)
         ].copy()
 
         if df.empty:
             return jsonify({"message": "No matching venues found"}), 404
 
-        # Try calculating fulfillment if missing
-        if df["fulfillment_percent"].isnull().all() and "attended_hh" in df and "registration_max" in df:
-            df["fulfillment_percent"] = df["attended_hh"] / (df["registration_max"] / 2.4)
+        # Scoring fallback
+        def safe_score(row):
+            try:
+                cpa = float(row["CPA"])
+                fulfillment = float(row["Fulfillment_Percent"])
+                attendance = float(row["Attendance_Rate"])
+                return ((1 / cpa) * 0.5 + fulfillment * 0.3 + attendance * 0.2) * 40
+            except:
+                return 0
 
-        # Numeric cleanup
-        df["cpa"] = pd.to_numeric(df["cpa"], errors="coerce")
-        df["attendance_rate"] = pd.to_numeric(df["attendance_rate"], errors="coerce")
-        df["fulfillment_percent"] = pd.to_numeric(df["fulfillment_percent"], errors="coerce")
-
-        df = df.dropna(subset=["cpa", "attendance_rate", "fulfillment_percent"])
-
-        # Scoring logic
-        df["score"] = (1 / df["cpa"]) * 0.5 + df["fulfillment_percent"] * 0.3 + df["attendance_rate"] * 0.2
-        df["score"] = df["score"] * 40
+        df["CPA"] = pd.to_numeric(df["CPA"], errors="coerce")
+        df["Fulfillment_Percent"] = pd.to_numeric(df["Fulfillment_Percent"], errors="coerce")
+        df["Attendance_Rate"] = pd.to_numeric(df["Attendance_Rate"], errors="coerce")
+        df["score"] = df.apply(safe_score, axis=1)
 
         top_venues = df.sort_values("score", ascending=False).head(4)
 
         result = []
         for _, row in top_venues.iterrows():
             result.append({
-                "venue": row.get("venue", ""),
+                "venue": row.get("Venue", ""),
                 "score": round(row["score"], 2),
                 "recommended_time_1": "11:00 AM Monday",
                 "recommended_time_2": "6:30 PM Tuesday",
-                "event_date": row.get("event_date", ""),
-                "event_time": row.get("event_time", ""),
-                "job_number": row.get("job_number", ""),
-                "CPA": row.get("cpa", ""),
-                "fulfillment_percent": f"{round(row['fulfillment_percent'], 2)}%",
-                "attendance_rate": f"{round(row['attendance_rate'], 2)}%",
-                "image_allowed": row.get("venue_image_allowed_(current)", ""),
-                "disclosure_needed": row.get("venue_disclosure_needed", "")
+                "event_date": row.get("Event Date", ""),
+                "event_time": row.get("Event Time", ""),
+                "job_number": row.get("Job Number", ""),
+                "CPA": row.get("CPA", ""),
+                "fulfillment_percent": row.get("Fulfillment_Percent", ""),
+                "attendance_rate": row.get("Attendance_Rate", "")
             })
 
         return jsonify(result)
 
     except Exception as e:
-        return jsonify({
-            "error": "Failed to process VOR",
-            "details": str(e)
-        }), 500
+        return jsonify({"error": "Failed to process VOR", "details": str(e)}), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
