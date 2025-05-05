@@ -1,18 +1,30 @@
-from fastapi import FastAPI, Query
+from fastapi import FastAPI
 from supabase import create_client, Client
-from typing import Optional
 import pandas as pd
+from typing import Optional
 import datetime
+import os
+from dotenv import load_dotenv
 import uvicorn
 
-# Supabase config
-SUPABASE_URL = "https://drcjaimdtalwvpvqbdmb.supabase.co"
-SUPABASE_KEY = "YOUR_SUPABASE_KEY"
+# ✅ Load environment variables
+load_dotenv()
+
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+# ✅ Debug startup env var values (remove these lines after testing)
+print("✅ SUPABASE_URL loaded:", SUPABASE_URL)
+print("✅ SUPABASE_KEY loaded:", SUPABASE_KEY[:10] + "..." if SUPABASE_KEY else "❌ MISSING")
+
+# ✅ Validate key presence before client creation
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise ValueError("❌ SUPABASE_URL or SUPABASE_KEY is missing!")
+
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 app = FastAPI()
 
-# Topic normalization
 topic_map = {
     "SS": "Social_Security_567",
     "TIR": "Taxes_in_Retirement_567",
@@ -42,12 +54,7 @@ def compute_score(row):
         Attendance = row['Attendance_Rate']
         score = ((1 / CPA) * 0.5 + Fulfillment * 0.3 + Attendance * 0.2) * 40
         days_ago = (datetime.datetime.now() - row['Event_Date']).days
-        if days_ago <= 30:
-            score *= 1.25
-        elif days_ago <= 90:
-            score *= 1.0
-        else:
-            score *= 0.8
+        score *= 1.25 if days_ago <= 30 else 1.0 if days_ago <= 90 else 0.8
         return round(score, 2)
     except:
         return 0
@@ -144,6 +151,7 @@ def recommend_schedule(city: str, topic: str):
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
 
 
 
