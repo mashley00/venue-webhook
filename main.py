@@ -13,7 +13,7 @@ CSV_URL = "https://raw.githubusercontent.com/mashley00/venue-webhook/main/data/A
 def health_check():
     return "OK", 200
 
-# Manual scoring (e.g., from Zapier)
+# Manual scoring endpoint (for Zapier or manual forms)
 @app.route("/score_manual", methods=["POST"])
 def score_manual():
     data = request.json
@@ -33,7 +33,7 @@ def score_manual():
         "recommended_time_2": "6:30 PM Tuesday"
     })
 
-# Venue Optimization Request (VOR) endpoint
+# Venue Optimization Request endpoint
 @app.route("/vor", methods=["POST"])
 def vor():
     try:
@@ -42,7 +42,7 @@ def vor():
         city = payload["city"].strip().upper()
         state = payload["state"].strip().upper()
 
-        # Topic normalization
+        # Normalize topic
         topic_map = {
             "TIR": "TAXES_IN_RETIREMENT_567",
             "EP": "ESTATE_PLANNING_567",
@@ -50,7 +50,7 @@ def vor():
         }
         mapped_topic = topic_map.get(topic, topic)
 
-        # Load data from GitHub-hosted CSV
+        # Load data from GitHub
         response = requests.get(CSV_URL)
         if response.status_code != 200:
             return jsonify({"error": "Failed to load dataset from GitHub"}), 500
@@ -58,7 +58,11 @@ def vor():
         df = pd.read_csv(StringIO(response.text))
         df.columns = [col.strip() for col in df.columns]
 
-        # Filter relevant rows
+        # Ensure required column is present
+        if "Gross_Registrants" not in df.columns:
+            return jsonify({"error": "Missing column: Gross_Registrants"}), 500
+
+        # Filter matching rows
         df = df[
             (df["Topic"].str.upper().str.strip() == mapped_topic) &
             (df["City"].str.upper().str.strip() == city) &
@@ -68,7 +72,7 @@ def vor():
         if df.empty:
             return jsonify({"message": f"No matching venues found for {topic} in {city}, {state}."}), 404
 
-        # Convert fields for scoring
+        # Prepare for scoring
         df["CPA"] = pd.to_numeric(df["CPA"], errors="coerce")
         df["Fulfillment_Percent"] = pd.to_numeric(df["Fulfillment_Percent"], errors="coerce")
         df["Attendance_Rate"] = pd.to_numeric(df["Attendance_Rate"], errors="coerce")
@@ -80,16 +84,17 @@ def vor():
                 return 0
 
         df["score"] = df.apply(calculate_score, axis=1)
-        df = df.sort_values("score", ascending=False).head(4)
+        top_venues = df.sort_values("score", ascending=False).head(4)
 
-        venues = []
-        for _, row in df.iterrows():
-            venues.append({
+        result = []
+        for _, row in top_venues.iterrows():
+            venue_subset = df[df["Venue"] == row["Venue"]]
+            result.append({
                 "🥇 Venue Name": row.get("Venue", ""),
                 "📍 Location": f"{row.get('City', '')}, {row.get('State', '')}",
                 "🗓️ Most Recent Event": row.get("Event Date", ""),
-                "📆 Total Events": df[df["Venue"] == row["Venue"]].shape[0],
-                "👥 Avg. Gross Registrants": round(df[df["Venue"] == row["Venue"]]["Gross Registrants"].mean(), 2),
+                "📆 Total Events": venue_subset.shape[0],
+                "👥 Avg. Gross Registrants": round(venue_subset["Gross_Registrants"].mean(), 2),
                 "💰 Avg. CPA": f"${round(row.get('CPA', 0), 2)}",
                 "📈 FB CPR": f"${round(row.get('FB CPR', 0), 2)}",
                 "🎯 Attendance Rate": f"{round(row.get('Attendance_Rate', 0), 2)}%",
@@ -100,7 +105,7 @@ def vor():
                 "🕓 Best Time": "11:00 AM on Monday"
             })
 
-        return jsonify(venues), 200
+        return jsonify(result), 200
 
     except Exception as e:
         return jsonify({"error": "Failed to process VOR", "details": str(e)}), 500
