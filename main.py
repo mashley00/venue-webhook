@@ -2,14 +2,10 @@ from flask import Flask, request, jsonify
 import pandas as pd
 import requests
 from io import StringIO
-import os
-
-# ✅ Limit OpenBLAS threads to avoid memory issues
-os.environ["OPENBLAS_NUM_THREADS"] = "1"
 
 app = Flask(__name__)
 
-# 🔗 GitHub CSV (Always On)
+# Always-on GitHub-hosted CSV
 CSV_URL = "https://raw.githubusercontent.com/mashley00/venue-webhook/main/data/AllEvents.csv"
 
 @app.route("/", methods=["GET"])
@@ -50,21 +46,12 @@ def vor():
         }
         mapped_topic = topic_map.get(topic, topic)
 
-        # 📥 Pull & stream minimal CSV
         response = requests.get(CSV_URL)
         if response.status_code != 200:
-            return jsonify({"error": "Could not fetch dataset from GitHub."}), 500
+            return jsonify({"error": "Failed to load dataset from GitHub"}), 500
 
-        # 🔍 Columns required for VOR logic
-        use_columns = [
-            "Topic", "City", "State", "Venue", "Event Date", "Event Time",
-            "Job Number", "Gross_Registrants", "CPA", "FB CPR",
-            "Fulfillment_Percent", "Attendance_Rate",
-            "Venue Image Allowed (Current)", "Venue Disclosure Needed"
-        ]
-
-        df = pd.read_csv(StringIO(response.text), usecols=use_columns)
-        df.columns = [col.strip().replace(" ", "_") for col in df.columns]
+        df = pd.read_csv(StringIO(response.text))
+        df.columns = df.columns.str.strip().str.replace(" ", "_").str.replace("-", "_")
 
         df = df[
             (df["Topic"].str.upper().str.strip() == mapped_topic) &
@@ -90,22 +77,23 @@ def vor():
 
         venues = []
         for _, row in df.iterrows():
-            venue_data = {
+            venues.append({
                 "🥇 Venue Name": row.get("Venue", ""),
                 "📍 Location": f"{row.get('City', '')}, {row.get('State', '')}",
-                "🗓️ Most Recent Event": row.get("Event_Date", ""),
+                "🗓️ Most Recent Event": row.get("Event_Date", "N/A"),
+                "⏰ Event Time": row.get("Event_Time", "N/A"),
+                "#️⃣ Job Number": row.get("Job_Number", "N/A"),
                 "📆 Total Events": df[df["Venue"] == row["Venue"]].shape[0],
                 "👥 Avg. Gross Registrants": round(df[df["Venue"] == row["Venue"]]["Gross_Registrants"].mean(), 2),
                 "💰 Avg. CPA": f"${round(row.get('CPA', 0), 2)}",
                 "📈 FB CPR": f"${round(row.get('FB_CPR', 0), 2)}",
                 "🎯 Attendance Rate": f"{round(row.get('Attendance_Rate', 0), 2)}%",
                 "📊 Fulfillment %": f"{round(row.get('Fulfillment_Percent', 0), 2)}%",
-                "🖼️ Image Allowed": "✅" if str(row.get("Venue_Image_Allowed_(Current)", "")).strip().lower() == "yes" else "❌",
+                "🖼️ Image Allowed": "✅" if str(row.get("Venue_Image_Allowed_Current", "")).strip().lower() == "yes" else "❌",
                 "⚠️ Disclosure Needed": "✅" if str(row.get("Venue_Disclosure_Needed", "")).strip().lower() == "yes" else "❌",
                 "🏆 Score": f"{round(row.get('score', 0), 2)} / 40",
                 "🕓 Best Time": "11:00 AM on Monday"
-            }
-            venues.append(venue_data)
+            })
 
         return jsonify(venues), 200
 
@@ -114,8 +102,6 @@ def vor():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
-
-
 
 
 
