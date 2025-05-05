@@ -7,33 +7,31 @@ import os
 from dotenv import load_dotenv
 import uvicorn
 
-# ✅ Load environment variables
+# Load environment variables
 load_dotenv()
-
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-# ✅ Debug startup env var values (remove these lines after testing)
-print("✅ SUPABASE_URL loaded:", SUPABASE_URL)
-print("✅ SUPABASE_KEY loaded:", SUPABASE_KEY[:10] + "..." if SUPABASE_KEY else "❌ MISSING")
-
-# ✅ Validate key presence before client creation
+# Ensure environment vars are present
 if not SUPABASE_URL or not SUPABASE_KEY:
-    raise ValueError("❌ SUPABASE_URL or SUPABASE_KEY is missing!")
+    raise ValueError("❌ Missing SUPABASE_URL or SUPABASE_KEY!")
 
+# Connect to Supabase
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
 app = FastAPI()
 
+# Human-readable to Supabase topic mapping
 topic_map = {
-    "SS": "Social_Security_567",
     "TIR": "Taxes_in_Retirement_567",
-    "EP": "Estate_Planning_567"
+    "EP": "Estate_Planning_567",
+    "SS": "Social_Security_567"
 }
 
+# Fetch and clean data from Supabase
 def fetch_data():
     response = supabase.table("all_events").select("*").execute()
     df = pd.DataFrame(response.data)
+
     df.rename(columns={
         'Event Date': 'Event_Date',
         'Venue Image Allowed (Time of Event)': 'Venue_Image_Allowed',
@@ -44,9 +42,12 @@ def fetch_data():
         'Attended HH': 'Attended_HH',
         'Registration Max': 'Registration_Max'
     }, inplace=True)
+
     df['Event_Date'] = pd.to_datetime(df['Event_Date'], errors='coerce')
+    df.columns = df.columns.str.replace(" ", "_")
     return df
 
+# Scoring logic
 def compute_score(row):
     try:
         CPA = row['CPA']
@@ -68,6 +69,7 @@ def vor(topic: str, city: str, state: str, miles: Optional[int] = 6):
         (df['City'].str.lower() == city.lower()) &
         (df['State'].str.lower() == state.lower())
     ]
+
     if df.empty:
         return {"message": "No matching data found."}
 
@@ -105,6 +107,7 @@ def predict_venue(venue: str, topic: str):
         (df['Venue'].str.lower() == venue.lower()) &
         (df['Topic'] == mapped_topic)
     ]
+
     if df.empty:
         return {"message": "No data for this venue/topic combination."}
 
@@ -115,8 +118,8 @@ def predict_venue(venue: str, topic: str):
     return {
         "Projected_CPA": round(df['CPA'].mean() / decay, 2),
         "Projected_Registrants": int(df['Gross_Registrants'].mean() * decay),
-        "Projected_Attendance_Rate": round(df['Attendance_Rate'].mean(), 2),
-        "Projected_Fulfillment": round(df['Fulfillment_Percent'].mean(), 2),
+        "Projected_Attendance_Rate": round(df['Attended_HH'].sum() / df['Gross_Registrants'].sum(), 2),
+        "Projected_Fulfillment": round(df['Attended_HH'].sum() / (df['Registration_Max'].sum() / 2.4), 2),
         "Days_Since_Last_Event": days_since
     }
 
@@ -128,6 +131,7 @@ def recommend_schedule(city: str, topic: str):
         (df['City'].str.lower() == city.lower()) &
         (df['Topic'] == mapped_topic)
     ]
+
     if df.empty:
         return {"message": "No matching data found."}
 
@@ -149,8 +153,10 @@ def recommend_schedule(city: str, topic: str):
 
     return schedule_perf.sort_values(by='Score', ascending=False).head(5).to_dict(orient='records')
 
+# Local debug runner (not used in Render)
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
 
 
 
