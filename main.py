@@ -1,166 +1,136 @@
-from fastapi import FastAPI
-from supabase import create_client, Client
-import pandas as pd
-from typing import Optional
-import datetime
 import os
 from dotenv import load_dotenv
-import uvicorn
+from fastapi import FastAPI, Query
+from fastapi.middleware.cors import CORSMiddleware
+from supabase import create_client, Client
+import pandas as pd
+from datetime import datetime
+from typing import Optional
 
+# Load environment variables
 load_dotenv()
-
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-if not SUPABASE_URL or not SUPABASE_KEY:
-    raise ValueError("❌ Missing Supabase credentials")
-
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# Initialize app
 app = FastAPI()
 
-topic_map = {
-    "TIR": "Taxes_in_Retirement_567",
-    "EP": "Estate_Planning_567",
-    "SS": "Social_Security_567"
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Topic mapping: normalize to abbreviations
+TOPIC_MAP = {
+    'taxes_in_retirement_567': 'TIR',
+    'estate_planning_567': 'EP',
+    'social_security_567': 'SS'
 }
 
-def fetch_data():
-    response = supabase.table("All Events 1").select("*").execute()
-    df = pd.DataFrame(response.data)
-    df.columns = df.columns.str.replace(" ", "_").str.strip()
-    df['Event_Date'] = pd.to_datetime(df['Event_Date'], errors='coerce')
-    return df
-
-def get_column(df, primary, fallbacks=[]):
-    if primary in df.columns:
-        return primary
-    for col in fallbacks:
-        if col in df.columns:
-            return col
-    return None
-
-def compute_score(row):
-    try:
-        CPA = float(row['CPA'])
-        Fulfillment = row['Fulfillment_Percent']
-        Attendance = row['Attendance_Rate']
-        score = ((1 / CPA) * 0.5 + Fulfillment * 0.3 + Attendance * 0.2) * 40
-        days_ago = (datetime.datetime.now() - row['Event_Date']).days
-        score *= 1.25 if days_ago <= 30 else 1.0 if days_ago <= 90 else 0.8
-        return round(score, 2)
-    except:
+# Utility: calculate performance score
+def calculate_score(row, recency_weight):
+    if row["CPA"] == 0 or pd.isnull(row["CPA"]):
         return 0
+    CPA_component = (1 / row["CPA"]) * 0.5
+    fulfillment_component = row["Fulfillment %"] * 0.3
+    attendance_component = row["Attendance Rate"] * 0.2
+    raw_score = (CPA_component + fulfillment_component + attendance_component) * recency_weight
+    return min(raw_score * 40, 40)
 
+# Route: VOR endpoint
 @app.get("/vor")
-def vor(topic: str, city: str, state: str, miles: Optional[int] = 6):
-    df = fetch_data()
-    topic_value = topic_map.get(topic.upper(), topic)
-    df = df[
-        (df['Topic'] == topic_value) &
-        (df['City'].str.lower() == city.lower()) &
-        (df['State'].str.upper() == state.upper())
-    ]
+def get_top_venues(
+    topic: str = Query(..., description="Seminar topic abbreviation: TIR, EP, or SS"),
+    city: str = Query(...),
+    state: str = Query(...),
+    radius: int = Query(6)
+):
+    try:
+        # Fetch data
+        response = supabase.table("All Events 1").select("*").execute()
+        df = pd.DataFrame(response.data)
 
-    if df.empty:
-        return {"message": f"No matching events for topic '{topic}' in {city}, {state}."}
+        if df.empty:
+            return {"error": "No data returned from Supabase."}
 
-    # Flexible columns
-    cpr_col = get_column(df, "CPR", ["FB_CPR"])
-    img_col = get_column(df, "Venue_Image_Allowed", ["Venue_Image_Allowed_Current", "Venue_Image_Allowed-Current"])
-    disclosure_col = get_column(df, "Venue_Disclosure_Needed")
+        # Normalize and map topic column
+        df["Topic"] = df["Topic"].str.strip().str.lower().map(TOPIC_MAP)
 
-    # Calculate score components
-    df['Attendance_Rate'] = df['Attended_HH'] / df['Gross_Registrants']
-    df['Fulfillment_Percent'] = df['Attended_HH'] / (df['Registration_Max'] / 2.4)
-    df['Score'] = df.apply(compute_score, axis=1)
+        # Filter by topic
+        df = df[df["Topic"] == topic.upper()]
+        if df.empty:
+            return {"message": f"No events found for topic {topic} in city {city}, state {state}."}
 
-    # Build aggregation logic
-    agg_dict = {
-        'CPA': ('CPA', 'mean'),
-        'Attendance_Rate': ('Attendance_Rate', 'mean'),
-        'Fulfillment_Percent': ('Fulfillment_Percent', 'mean'),
-        'Score': ('Score', 'mean'),
-        'Event_Count': ('Venue', 'count'),
-        'Last_Event': ('Event_Date', 'max')
-    }
-    if cpr_col:
-        agg_dict['Avg_CPR'] = (cpr_col, 'mean')
-    if img_col:
-        agg_dict['Image_Allowed'] = (img_col, 'max')
-    if disclosure_col:
-        agg_dict['Disclosure_Required'] = (disclosure_col, 'max')
+        # Convert date column
+        df["Event_Date"] = pd.to_datetime(df["Event_Date"], errors='coerce')
+        df = df.dropna(subset=["Event_Date"])
 
-    result = (
-        df.groupby("Venue")
-        .agg(**agg_dict)
-        .sort_values(by="Score", ascending=False)
-        .reset_index()
-    )
+        # Location filtering
+        df = df[df["City"].str.lower() == city.lower()]
+        df = df[df["State"].str.lower() == state.lower()]
+        if df.empty:
+            return {"message": f"No matching venues found in {city}, {state}."}
 
-    return result.head(4).to_dict(orient="records")
+        # Calculate metrics
+        df["Attendance Rate"] = df["Attended_HH"] / df["Gross_Registrants"]
+        df["Fulfillment %"] = df["Attended_HH"] / (df["Registration_Max"] / 2.4)
+        df["CPA"] = df["CPR"] / df["Attendance Rate"]
 
-@app.post("/score_manual")
-def score_manual(CPA: float, Fulfillment_Percent: float, Attendance_Rate: float, Event_Date: str):
-    event_date = pd.to_datetime(Event_Date)
-    base_score = ((1 / CPA) * 0.5 + Fulfillment_Percent * 0.3 + Attendance_Rate * 0.2) * 40
-    days_ago = (datetime.datetime.now() - event_date).days
-    weight = 1.25 if days_ago <= 30 else 1.0 if days_ago <= 90 else 0.8
-    return {"score": round(base_score * weight, 2)}
+        # Recency weight
+        today = datetime.now()
+        df["Days Ago"] = (today - df["Event_Date"]).dt.days
+        df["Recency Weight"] = df["Days Ago"].apply(
+            lambda x: 1.25 if x <= 30 else 1.0 if x <= 90 else 0.8
+        )
 
-@app.get("/predict_venue")
-def predict_venue(venue: str, topic: str):
-    df = fetch_data()
-    topic_value = topic_map.get(topic.upper(), topic)
-    df = df[
-        (df['Venue'].str.lower() == venue.lower()) &
-        (df['Topic'] == topic_value)
-    ]
-    if df.empty:
-        return {"message": f"No data for {venue} and topic {topic}"}
+        # Score venues
+        df["Score"] = df.apply(lambda row: calculate_score(row, row["Recency Weight"]), axis=1)
 
-    last_event = df['Event_Date'].max()
-    days_since = (datetime.datetime.now() - last_event).days
-    decay = 0.6 if days_since < 30 else 0.75 if days_since < 60 else 0.9 if days_since < 90 else 1.0
+        # Group and summarize
+        summary = df.groupby("Venue").agg({
+            "Event_Date": "max",
+            "Job_Number": "count",
+            "Gross_Registrants": "mean",
+            "CPA": "mean",
+            "CPR": "mean",
+            "Attendance Rate": "mean",
+            "Fulfillment %": "mean",
+            "Score": "mean",
+            "Venue_Image_Allowed": "first",
+            "Venue_Disclosure_Needed": "first"
+        }).reset_index()
 
-    return {
-        "Projected_CPA": round(df['CPA'].mean() / decay, 2),
-        "Projected_Registrants": int(df['Gross_Registrants'].mean() * decay),
-        "Projected_Attendance_Rate": round(df['Attended_HH'].sum() / df['Gross_Registrants'].sum(), 2),
-        "Projected_Fulfillment": round(df['Attended_HH'].sum() / (df['Registration_Max'].sum() / 2.4), 2),
-        "Days_Since_Last_Event": days_since
-    }
+        summary = summary.sort_values("Score", ascending=False).head(4)
 
-@app.get("/recommend_schedule")
-def recommend_schedule(city: str, topic: str):
-    df = fetch_data()
-    topic_value = topic_map.get(topic.upper(), topic)
-    df = df[
-        (df['City'].str.lower() == city.lower()) &
-        (df['Topic'] == topic_value)
-    ]
-    if df.empty:
-        return {"message": "No schedule data for that city/topic."}
+        # Format response
+        results = []
+        for _, row in summary.iterrows():
+            results.append({
+                "🏅 Venue": row["Venue"],
+                "📍 Location": f"{city.title()}, {state.upper()}",
+                "📅 Most Recent Event": row["Event_Date"].strftime('%Y-%m-%d'),
+                "🗓️ Event Count": int(row["Job_Number"]),
+                "📈 Avg. Gross Registrants": round(row["Gross_Registrants"], 1),
+                "💰 Avg. CPA": round(row["CPA"], 2),
+                "💵 Avg. CPR": round(row["CPR"], 2),
+                "📊 Attendance Rate": f"{round(row['Attendance Rate'] * 100, 1)}%",
+                "🎯 Fulfillment %": f"{round(row['Fulfillment %'] * 100, 1)}%",
+                "📸 Image Allowed": "✅" if row["Venue_Image_Allowed"] else "❌",
+                "⚠️ Disclosure Needed": "✅" if row["Venue_Disclosure_Needed"] else "❌",
+                "🥇 Score": f"{round(row['Score'], 2)}/40"
+            })
 
-    df['Day'] = df['Event_Date'].dt.day_name()
-    df['Time'] = df['Event_Date'].dt.strftime('%H:%M')
-    df['Attendance_Rate'] = df['Attended_HH'] / df['Gross_Registrants']
-    df['Fulfillment_Percent'] = df['Attended_HH'] / (df['Registration_Max'] / 2.4)
+        return {"results": results}
 
-    performance = df.groupby(['Day', 'Time']).agg(
-        CPA=('CPA', 'mean'),
-        Fulfillment=('Fulfillment_Percent', 'mean'),
-        Attendance=('Attendance_Rate', 'mean'),
-        Count=('Venue', 'count')
-    ).reset_index()
+    except Exception as e:
+        return {"error": str(e)}
 
-    performance['Score'] = (1 / performance['CPA']) * 0.5 + \
-                           performance['Fulfillment'] * 0.3 + \
-                           performance['Attendance'] * 0.2
-
-    return performance.sort_values(by='Score', ascending=False).head(5).to_dict(orient='records')
-
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
 
 
 
