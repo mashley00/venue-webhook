@@ -1,110 +1,94 @@
-
-from flask import Flask, request, jsonify
+from fastapi import FastAPI, Query
+from supabase import create_client, Client
+from typing import Optional
 import pandas as pd
-import requests
-from io import StringIO
+import datetime
+import uvicorn
 
-app = Flask(__name__)
+# Supabase credentials
+SUPABASE_URL = "https://drcjaimdtalwvpvqbdmb.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRyY2phaW1kdGFsd3ZwdnFiZG1iIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDY0NTgxMzMsImV4cCI6MjA2MjAzNDEzM30.9ztc3baZzHlgrCYHyDeUG7xHiwA6gyErKlPYmtzKFMw"
 
-# GitHub-hosted CSV URL
-CSV_URL = "https://raw.githubusercontent.com/mashley00/venue-webhook/main/data/AllEvents.csv"
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+app = FastAPI()
 
-# Health check route
-@app.route("/", methods=["GET"])
-def health_check():
-    return "OK", 200
+def fetch_data():
+    response = supabase.table("all_events").select("*").execute()
+    df = pd.DataFrame(response.data)
+    df['Event_Date'] = pd.to_datetime(df['Event_Date'], errors='coerce')
+    return df
 
-# Manual scoring endpoint (Zapier)
-@app.route("/score_manual", methods=["POST"])
-def score_manual():
-    data = request.json
+def compute_score(row):
     try:
-        cpa = float(data["CPA"])
-        fulfillment = float(data["Fulfillment_Percent"].replace("%", "").strip())
-        attendance = float(data["Attendance_Rate"].replace("%", "").strip())
-        raw_score = (1 / cpa) * 0.5 + fulfillment * 0.3 + attendance * 0.2
-        normalized_score = min((raw_score / 2.5) * 100, 100)
-    except Exception as e:
-        return jsonify({"error": "Invalid input", "details": str(e)}), 400
+        CPA = float(row['CPA'])
+        Fulfillment = float(row['Fulfillment_Percent'])
+        Attendance = float(row['Attendance_Rate'])
+        event_date = row['Event_Date']
+        score = ((1 / CPA) * 0.5 + Fulfillment * 0.3 + Attendance * 0.2) * 40
 
-    return jsonify({
-        "venue": data.get("Venue", "Unknown"),
-        "score": round(normalized_score, 2),
-        "recommended_time_1": "11:00 AM Monday",
-        "recommended_time_2": "6:30 PM Tuesday"
-    })
+        # Recency weighting
+        days_ago = (datetime.datetime.now() - event_date).days
+        if days_ago <= 30:
+            score *= 1.25
+        elif days_ago <= 90:
+            score *= 1.0
+        else:
+            score *= 0.8
+        return round(score, 2)
+    except:
+        return 0
 
-# VOR endpoint for optimized venue suggestions
-@app.route("/vor", methods=["POST"])
-def vor():
+@app.get("/vor")
+def vor(topic: str, city: str, state: str, miles: Optional[int] = 6):
+    df = fetch_data()
+
+    df = df[df['Topic'].str.upper() == topic.upper()]
+    df = df[df['City'].str.lower() == city.lower()]
+    df = df[df['State'].str.lower() == state.lower()]
+
+    if df.empty:
+        return {"message": "No matching data found."}
+
+    df['Score'] = df.apply(compute_score, axis=1)
+
+    venue_summary = (
+        df.groupby("Venue")
+        .agg(
+            Avg_CPA=('CPA', 'mean'),
+            Avg_CPR=('CPR', 'mean'),
+            Avg_Attendance=('Attendance_Rate', 'mean'),
+            Avg_Fulfillment=('Fulfillment_Percent', 'mean'),
+            Avg_Score=('Score', 'mean'),
+            Event_Count=('Venue', 'count'),
+            Last_Event=('Event_Date', 'max')
+        )
+        .sort_values(by="Avg_Score", ascending=False)
+        .reset_index()
+    )
+
+    top_venues = venue_summary.head(4).to_dict(orient="records")
+    return {"top_venues": top_venues}
+
+@app.post("/score_manual")
+def score_manual(CPA: float, Fulfillment_Percent: float, Attendance_Rate: float, Event_Date: str):
     try:
-        payload = request.json
-        topic = payload["topic"].strip().upper()
-        city = payload["city"].strip().upper()
-        state = payload["state"].strip().upper()
+        event_date = pd.to_datetime(Event_Date)
+        base_score = ((1 / CPA) * 0.5 + Fulfillment_Percent * 0.3 + Attendance_Rate * 0.2) * 40
 
-        topic_map = {
-            "TIR": "TAXES_IN_RETIREMENT_567",
-            "EP": "ESTATE_PLANNING_567",
-            "SS": "SOCIAL_SECURITY_567"
-        }
-        mapped_topic = topic_map.get(topic, topic)
+        days_ago = (datetime.datetime.now() - event_date).days
+        if days_ago <= 30:
+            weighted_score = base_score * 1.25
+        elif days_ago <= 90:
+            weighted_score = base_score * 1.0
+        else:
+            weighted_score = base_score * 0.8
 
-        response = requests.get(CSV_URL)
-        if response.status_code != 200:
-            return jsonify({"error": "Failed to fetch dataset from GitHub"}), 500
-
-        df = pd.read_csv(StringIO(response.text))
-        df.columns = [col.strip() for col in df.columns]
-
-        df = df[
-            (df["Topic"].str.upper().str.strip() == mapped_topic) &
-            (df["City"].str.upper().str.strip() == city) &
-            (df["State"].str.upper().str.strip() == state)
-        ].copy()
-
-        if df.empty:
-            return jsonify({"message": f"No matching venues found for {topic} in {city}, {state}."}), 404
-
-        df["CPA"] = pd.to_numeric(df["CPA"], errors="coerce")
-        df["Fulfillment_Percent"] = pd.to_numeric(df["Fulfillment_Percent"], errors="coerce")
-        df["Attendance_Rate"] = pd.to_numeric(df["Attendance_Rate"], errors="coerce")
-
-        def calculate_score(row):
-            try:
-                raw = (1 / row["CPA"]) * 0.5 + row["Fulfillment_Percent"] * 0.3 + row["Attendance_Rate"] * 0.2
-                return min((raw / 2.5) * 100, 100)
-            except:
-                return 0
-
-        df["score"] = df.apply(calculate_score, axis=1)
-        df = df.sort_values("score", ascending=False).head(4)
-
-        venues = []
-        for _, row in df.iterrows():
-            venues.append({
-                "🥇 Venue Name": row.get("Venue", ""),
-                "📍 Location": f"{row.get('City', '')}, {row.get('State', '')}",
-                "🗓️ Most Recent Event": row.get("Event_Date", ""),
-                "📆 Total Events": df[df["Venue"] == row["Venue"]].shape[0],
-                "👥 Avg. Gross Registrants": round(df[df["Venue"] == row["Venue"]]["Gross_Registrants"].mean(), 2),
-                "💰 Avg. CPA": f"${round(row.get('CPA', 0), 2)}",
-                "📈 FB CPR": f"${round(row.get('FB_CPR', 0), 2)}",
-                "🎯 Attendance Rate": f"{round(row.get('Attendance_Rate', 0), 2)}%",
-                "📊 Fulfillment %": f"{round(row.get('Fulfillment_Percent', 0), 2)}%",
-                "🖼️ Image Allowed": "✅" if str(row.get("Venue_Image_Allowed-Current", "")).strip().lower() == "yes" else "❌",
-                "⚠️ Disclosure Needed": "✅" if str(row.get("Venue_Disclosure_Needed", "")).strip().lower() == "yes" else "❌",
-                "🏆 Score": f"{round(row.get('score', 0), 2)} / 100",
-                "🕓 Best Time": "11:00 AM on Monday"
-            })
-
-        return jsonify(venues), 200
-
+        return {"score": round(weighted_score, 2)}
     except Exception as e:
-        return jsonify({"error": "Failed to process VOR", "details": str(e)}), 500
+        return {"error": str(e)}
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
 
 
 
