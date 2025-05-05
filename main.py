@@ -7,38 +7,37 @@ import os
 from dotenv import load_dotenv
 import uvicorn
 
-# Load environment variables
 load_dotenv()
+
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 if not SUPABASE_URL or not SUPABASE_KEY:
-    raise ValueError("❌ SUPABASE_URL or SUPABASE_KEY not set!")
+    raise ValueError("❌ Missing Supabase credentials")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 app = FastAPI()
 
-# Topic mapping
 topic_map = {
     "TIR": "Taxes_in_Retirement_567",
     "EP": "Estate_Planning_567",
     "SS": "Social_Security_567"
 }
 
-# Column helper
-def get_column(df, preferred, fallback_list):
-    for col in [preferred] + fallback_list:
-        if col in df.columns:
-            return col
-    return None
-
 def fetch_data():
     response = supabase.table("All Events 1").select("*").execute()
     df = pd.DataFrame(response.data)
-
     df.columns = df.columns.str.replace(" ", "_").str.strip()
     df['Event_Date'] = pd.to_datetime(df['Event_Date'], errors='coerce')
     return df
+
+def get_column(df, primary, fallbacks=[]):
+    if primary in df.columns:
+        return primary
+    for col in fallbacks:
+        if col in df.columns:
+            return col
+    return None
 
 def compute_score(row):
     try:
@@ -63,44 +62,42 @@ def vor(topic: str, city: str, state: str, miles: Optional[int] = 6):
     ]
 
     if df.empty:
-        return {"message": f"No matching data found for topic '{topic}' in {city}, {state}."}
+        return {"message": f"No matching events for topic '{topic}' in {city}, {state}."}
 
-    cpr_col = get_column(df, 'CPR', ['FB_CPR'])
-    img_col = get_column(df, 'Venue_Image_Allowed', ['Venue_Image_Allowed_Current', 'Venue_Image_Allowed-Current'])
-    disclosure_col = get_column(df, 'Venue_Disclosure_Needed', [])
+    # Flexible columns
+    cpr_col = get_column(df, "CPR", ["FB_CPR"])
+    img_col = get_column(df, "Venue_Image_Allowed", ["Venue_Image_Allowed_Current", "Venue_Image_Allowed-Current"])
+    disclosure_col = get_column(df, "Venue_Disclosure_Needed")
 
+    # Calculate score components
     df['Attendance_Rate'] = df['Attended_HH'] / df['Gross_Registrants']
     df['Fulfillment_Percent'] = df['Attended_HH'] / (df['Registration_Max'] / 2.4)
     df['Score'] = df.apply(compute_score, axis=1)
 
+    # Build aggregation logic
     agg_dict = {
         'CPA': ('CPA', 'mean'),
         'Attendance_Rate': ('Attendance_Rate', 'mean'),
         'Fulfillment_Percent': ('Fulfillment_Percent', 'mean'),
         'Score': ('Score', 'mean'),
-        'Venue': ('Venue', 'count'),
-        'Event_Date': ('Event_Date', 'max'),
+        'Event_Count': ('Venue', 'count'),
+        'Last_Event': ('Event_Date', 'max')
     }
-
     if cpr_col:
-        agg_dict['CPR'] = (cpr_col, 'mean')
+        agg_dict['Avg_CPR'] = (cpr_col, 'mean')
     if img_col:
         agg_dict['Image_Allowed'] = (img_col, 'max')
     if disclosure_col:
         agg_dict['Disclosure_Required'] = (disclosure_col, 'max')
 
-    summary = (
+    result = (
         df.groupby("Venue")
         .agg(**agg_dict)
-        .rename(columns={
-            'Venue': 'Event_Count',
-            'Event_Date': 'Last_Event'
-        })
         .sort_values(by="Score", ascending=False)
         .reset_index()
     )
 
-    return summary.head(4).to_dict(orient="records")
+    return result.head(4).to_dict(orient="records")
 
 @app.post("/score_manual")
 def score_manual(CPA: float, Fulfillment_Percent: float, Attendance_Rate: float, Event_Date: str):
@@ -119,7 +116,7 @@ def predict_venue(venue: str, topic: str):
         (df['Topic'] == topic_value)
     ]
     if df.empty:
-        return {"message": f"No historical data found for {venue} and topic {topic}"}
+        return {"message": f"No data for {venue} and topic {topic}"}
 
     last_event = df['Event_Date'].max()
     days_since = (datetime.datetime.now() - last_event).days
@@ -142,29 +139,29 @@ def recommend_schedule(city: str, topic: str):
         (df['Topic'] == topic_value)
     ]
     if df.empty:
-        return {"message": "No matching data found for that city/topic."}
+        return {"message": "No schedule data for that city/topic."}
 
     df['Day'] = df['Event_Date'].dt.day_name()
     df['Time'] = df['Event_Date'].dt.strftime('%H:%M')
     df['Attendance_Rate'] = df['Attended_HH'] / df['Gross_Registrants']
     df['Fulfillment_Percent'] = df['Attended_HH'] / (df['Registration_Max'] / 2.4)
 
-    schedule_perf = df.groupby(['Day', 'Time']).agg(
+    performance = df.groupby(['Day', 'Time']).agg(
         CPA=('CPA', 'mean'),
         Fulfillment=('Fulfillment_Percent', 'mean'),
         Attendance=('Attendance_Rate', 'mean'),
         Count=('Venue', 'count')
     ).reset_index()
 
-    schedule_perf['Score'] = (1 / schedule_perf['CPA']) * 0.5 + \
-                             schedule_perf['Fulfillment'] * 0.3 + \
-                             schedule_perf['Attendance'] * 0.2
+    performance['Score'] = (1 / performance['CPA']) * 0.5 + \
+                           performance['Fulfillment'] * 0.3 + \
+                           performance['Attendance'] * 0.2
 
-    return schedule_perf.sort_values(by='Score', ascending=False).head(5).to_dict(orient='records')
+    return performance.sort_values(by='Score', ascending=False).head(5).to_dict(orient='records')
 
-# Local test runner (only if run manually)
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
 
 
 
