@@ -1,15 +1,19 @@
 from flask import Flask, request, jsonify
 import pandas as pd
+import requests
+from io import StringIO
 
 app = Flask(__name__)
 
-# Path to the locally hosted CSV
-CSV_PATH = "data/AllEvents.csv"
+# Always-on GitHub-hosted CSV
+CSV_URL = "https://raw.githubusercontent.com/mashley00/venue-webhook/main/data/AllEvents.csv"
 
+# Health check route
 @app.route("/", methods=["GET"])
 def health_check():
     return "OK", 200
 
+# Manual scoring (e.g., from Zapier)
 @app.route("/score_manual", methods=["POST"])
 def score_manual():
     data = request.json
@@ -29,6 +33,7 @@ def score_manual():
         "recommended_time_2": "6:30 PM Tuesday"
     })
 
+# Venue Optimization Request (VOR) endpoint
 @app.route("/vor", methods=["POST"])
 def vor():
     try:
@@ -45,10 +50,15 @@ def vor():
         }
         mapped_topic = topic_map.get(topic, topic)
 
-        df = pd.read_csv(CSV_PATH)
+        # Load data from GitHub-hosted CSV
+        response = requests.get(CSV_URL)
+        if response.status_code != 200:
+            return jsonify({"error": "Failed to load dataset from GitHub"}), 500
+
+        df = pd.read_csv(StringIO(response.text))
         df.columns = [col.strip() for col in df.columns]
 
-        # Filter by topic, city, state
+        # Filter relevant rows
         df = df[
             (df["Topic"].str.upper().str.strip() == mapped_topic) &
             (df["City"].str.upper().str.strip() == city) &
@@ -56,48 +66,47 @@ def vor():
         ].copy()
 
         if df.empty:
-            return jsonify({"message": "No matching venues found"}), 404
+            return jsonify({"message": f"No matching venues found for {topic} in {city}, {state}."}), 404
 
-        # Scoring fallback
-        def safe_score(row):
-            try:
-                cpa = float(row["CPA"])
-                fulfillment = float(row["Fulfillment_Percent"])
-                attendance = float(row["Attendance_Rate"])
-                return ((1 / cpa) * 0.5 + fulfillment * 0.3 + attendance * 0.2) * 40
-            except:
-                return 0
-
+        # Convert fields for scoring
         df["CPA"] = pd.to_numeric(df["CPA"], errors="coerce")
         df["Fulfillment_Percent"] = pd.to_numeric(df["Fulfillment_Percent"], errors="coerce")
         df["Attendance_Rate"] = pd.to_numeric(df["Attendance_Rate"], errors="coerce")
-        df["score"] = df.apply(safe_score, axis=1)
 
-        top_venues = df.sort_values("score", ascending=False).head(4)
+        def calculate_score(row):
+            try:
+                return ((1 / row["CPA"]) * 0.5 + row["Fulfillment_Percent"] * 0.3 + row["Attendance_Rate"] * 0.2) * 40
+            except:
+                return 0
 
-        result = []
-        for _, row in top_venues.iterrows():
-            result.append({
-                "venue": row.get("Venue", ""),
-                "score": round(row["score"], 2),
-                "recommended_time_1": "11:00 AM Monday",
-                "recommended_time_2": "6:30 PM Tuesday",
-                "event_date": row.get("Event Date", ""),
-                "event_time": row.get("Event Time", ""),
-                "job_number": row.get("Job Number", ""),
-                "CPA": row.get("CPA", ""),
-                "fulfillment_percent": row.get("Fulfillment_Percent", ""),
-                "attendance_rate": row.get("Attendance_Rate", "")
+        df["score"] = df.apply(calculate_score, axis=1)
+        df = df.sort_values("score", ascending=False).head(4)
+
+        venues = []
+        for _, row in df.iterrows():
+            venues.append({
+                "🥇 Venue Name": row.get("Venue", ""),
+                "📍 Location": f"{row.get('City', '')}, {row.get('State', '')}",
+                "🗓️ Most Recent Event": row.get("Event Date", ""),
+                "📆 Total Events": df[df["Venue"] == row["Venue"]].shape[0],
+                "👥 Avg. Gross Registrants": round(df[df["Venue"] == row["Venue"]]["Gross Registrants"].mean(), 2),
+                "💰 Avg. CPA": f"${round(row.get('CPA', 0), 2)}",
+                "📈 FB CPR": f"${round(row.get('FB CPR', 0), 2)}",
+                "🎯 Attendance Rate": f"{round(row.get('Attendance_Rate', 0), 2)}%",
+                "📊 Fulfillment %": f"{round(row.get('Fulfillment_Percent', 0), 2)}%",
+                "🖼️ Image Allowed": "✅" if str(row.get("Venue Image Allowed (Current)", "")).strip().lower() == "yes" else "❌",
+                "⚠️ Disclosure Needed": "✅" if str(row.get("Venue Disclosure Needed", "")).strip().lower() == "yes" else "❌",
+                "🏆 Score": f"{round(row.get('score', 0), 2)} / 40",
+                "🕓 Best Time": "11:00 AM on Monday"
             })
 
-        return jsonify(result)
+        return jsonify(venues), 200
 
     except Exception as e:
         return jsonify({"error": "Failed to process VOR", "details": str(e)}), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
-
 
 
 
