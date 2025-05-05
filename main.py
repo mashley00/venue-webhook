@@ -12,45 +12,37 @@ load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-# Ensure environment vars are present
 if not SUPABASE_URL or not SUPABASE_KEY:
-    raise ValueError("❌ Missing SUPABASE_URL or SUPABASE_KEY!")
+    raise ValueError("❌ SUPABASE_URL or SUPABASE_KEY not set!")
 
-# Connect to Supabase
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 app = FastAPI()
 
-# Human-readable to Supabase topic mapping
+# Topic mapping
 topic_map = {
     "TIR": "Taxes_in_Retirement_567",
     "EP": "Estate_Planning_567",
     "SS": "Social_Security_567"
 }
 
-# Fetch and clean data from Supabase
+# Column helper
+def get_column(df, preferred, fallback_list):
+    for col in [preferred] + fallback_list:
+        if col in df.columns:
+            return col
+    return None
+
 def fetch_data():
-    response = supabase.table("all_events").select("*").execute()
+    response = supabase.table("All Events 1").select("*").execute()
     df = pd.DataFrame(response.data)
 
-    df.rename(columns={
-        'Event Date': 'Event_Date',
-        'Venue Image Allowed (Time of Event)': 'Venue_Image_Allowed',
-        'Venue Disclosure Needed': 'Venue_Disclosure_Needed',
-        'FB CPR': 'CPR',
-        'Cost per Verified HH': 'CPA',
-        'Gross Registrants': 'Gross_Registrants',
-        'Attended HH': 'Attended_HH',
-        'Registration Max': 'Registration_Max'
-    }, inplace=True)
-
+    df.columns = df.columns.str.replace(" ", "_").str.strip()
     df['Event_Date'] = pd.to_datetime(df['Event_Date'], errors='coerce')
-    df.columns = df.columns.str.replace(" ", "_")
     return df
 
-# Scoring logic
 def compute_score(row):
     try:
-        CPA = row['CPA']
+        CPA = float(row['CPA'])
         Fulfillment = row['Fulfillment_Percent']
         Attendance = row['Attendance_Rate']
         score = ((1 / CPA) * 0.5 + Fulfillment * 0.3 + Attendance * 0.2) * 40
@@ -63,31 +55,50 @@ def compute_score(row):
 @app.get("/vor")
 def vor(topic: str, city: str, state: str, miles: Optional[int] = 6):
     df = fetch_data()
-    mapped_topic = topic_map.get(topic.upper(), topic)
+    topic_value = topic_map.get(topic.upper(), topic)
     df = df[
-        (df['Topic'] == mapped_topic) &
+        (df['Topic'] == topic_value) &
         (df['City'].str.lower() == city.lower()) &
-        (df['State'].str.lower() == state.lower())
+        (df['State'].str.upper() == state.upper())
     ]
 
     if df.empty:
-        return {"message": "No matching data found."}
+        return {"message": f"No matching data found for topic '{topic}' in {city}, {state}."}
+
+    cpr_col = get_column(df, 'CPR', ['FB_CPR'])
+    img_col = get_column(df, 'Venue_Image_Allowed', ['Venue_Image_Allowed_Current', 'Venue_Image_Allowed-Current'])
+    disclosure_col = get_column(df, 'Venue_Disclosure_Needed', [])
 
     df['Attendance_Rate'] = df['Attended_HH'] / df['Gross_Registrants']
     df['Fulfillment_Percent'] = df['Attended_HH'] / (df['Registration_Max'] / 2.4)
     df['Score'] = df.apply(compute_score, axis=1)
 
-    summary = df.groupby("Venue").agg(
-        Avg_CPA=('CPA', 'mean'),
-        Avg_CPR=('CPR', 'mean'),
-        Avg_Attendance=('Attendance_Rate', 'mean'),
-        Avg_Fulfillment=('Fulfillment_Percent', 'mean'),
-        Avg_Score=('Score', 'mean'),
-        Event_Count=('Venue', 'count'),
-        Last_Event=('Event_Date', 'max'),
-        Image_Allowed=('Venue_Image_Allowed', 'max'),
-        Disclosure_Required=('Venue_Disclosure_Needed', 'max')
-    ).sort_values(by="Avg_Score", ascending=False).reset_index()
+    agg_dict = {
+        'CPA': ('CPA', 'mean'),
+        'Attendance_Rate': ('Attendance_Rate', 'mean'),
+        'Fulfillment_Percent': ('Fulfillment_Percent', 'mean'),
+        'Score': ('Score', 'mean'),
+        'Venue': ('Venue', 'count'),
+        'Event_Date': ('Event_Date', 'max'),
+    }
+
+    if cpr_col:
+        agg_dict['CPR'] = (cpr_col, 'mean')
+    if img_col:
+        agg_dict['Image_Allowed'] = (img_col, 'max')
+    if disclosure_col:
+        agg_dict['Disclosure_Required'] = (disclosure_col, 'max')
+
+    summary = (
+        df.groupby("Venue")
+        .agg(**agg_dict)
+        .rename(columns={
+            'Venue': 'Event_Count',
+            'Event_Date': 'Last_Event'
+        })
+        .sort_values(by="Score", ascending=False)
+        .reset_index()
+    )
 
     return summary.head(4).to_dict(orient="records")
 
@@ -102,14 +113,13 @@ def score_manual(CPA: float, Fulfillment_Percent: float, Attendance_Rate: float,
 @app.get("/predict_venue")
 def predict_venue(venue: str, topic: str):
     df = fetch_data()
-    mapped_topic = topic_map.get(topic.upper(), topic)
+    topic_value = topic_map.get(topic.upper(), topic)
     df = df[
         (df['Venue'].str.lower() == venue.lower()) &
-        (df['Topic'] == mapped_topic)
+        (df['Topic'] == topic_value)
     ]
-
     if df.empty:
-        return {"message": "No data for this venue/topic combination."}
+        return {"message": f"No historical data found for {venue} and topic {topic}"}
 
     last_event = df['Event_Date'].max()
     days_since = (datetime.datetime.now() - last_event).days
@@ -126,14 +136,13 @@ def predict_venue(venue: str, topic: str):
 @app.get("/recommend_schedule")
 def recommend_schedule(city: str, topic: str):
     df = fetch_data()
-    mapped_topic = topic_map.get(topic.upper(), topic)
+    topic_value = topic_map.get(topic.upper(), topic)
     df = df[
         (df['City'].str.lower() == city.lower()) &
-        (df['Topic'] == mapped_topic)
+        (df['Topic'] == topic_value)
     ]
-
     if df.empty:
-        return {"message": "No matching data found."}
+        return {"message": "No matching data found for that city/topic."}
 
     df['Day'] = df['Event_Date'].dt.day_name()
     df['Time'] = df['Event_Date'].dt.strftime('%H:%M')
@@ -153,9 +162,10 @@ def recommend_schedule(city: str, topic: str):
 
     return schedule_perf.sort_values(by='Score', ascending=False).head(5).to_dict(orient='records')
 
-# Local debug runner (not used in Render)
+# Local test runner (only if run manually)
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
 
 
 
