@@ -56,30 +56,36 @@ def venue_optimization(request: VorRequest):
     try:
         response = supabase.table("all_events").select("*").execute()
         data = response.data
-    except Exception:
+        print(f"✅ Supabase returned {len(data)} rows")
+    except Exception as e:
+        print(f"❌ Supabase failed: {e}")
         data = []
 
-    # ✅ Correct fallback CSV path
     if not data:
         try:
             csv_url = "https://raw.githubusercontent.com/mashley00/VenueGPT/main/all_events_23_25.csv"
+            print(f"📥 Loading fallback CSV from {csv_url}")
             df = pd.read_csv(csv_url, encoding='utf-8')
+            print(f"✅ Fallback CSV loaded with {len(df)} rows")
             data = df.to_dict(orient="records")
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to load fallback CSV: {str(e)}")
 
     df = pd.DataFrame(data)
     if df.empty:
+        print("⚠️ DataFrame is empty after loading.")
         return {"message": "No event data available."}
 
     df.columns = df.columns.str.lower().str.replace(" ", "_").str.replace(r"[^\w\s]", "", regex=True)
     df = df[df["topic"].str.lower() == topic.lower()]
+    print(f"🔎 Filtered for topic '{topic}': {len(df)} rows")
+
     if df.empty:
         return {"message": f"No events for topic '{topic}'"}
 
     df["event_date"] = pd.to_datetime(df["event_date"], errors="coerce")
 
-    # 🌍 Geolocation setup
+    # Geolocation
     geolocator = OpenCage(api_key=OPENCAGE_API_KEY)
     try:
         loc = geolocator.geocode(f"{request.city}, {request.state}")
@@ -100,6 +106,7 @@ def venue_optimization(request: VorRequest):
 
     df = df[df.apply(is_within_radius, axis=1)]
     if df.empty:
+        print("❌ No venues found within radius.")
         return {"message": "No venues found within search radius."}
 
     df["event_age_days"] = (datetime.now() - df["event_date"]).dt.days
