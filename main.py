@@ -15,7 +15,7 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# === FastAPI Setup ===
+# === App setup ===
 app = FastAPI()
 
 app.add_middleware(
@@ -26,7 +26,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# === Data Preparation ===
+# === Utils ===
 def clean_columns(df):
     df.columns = df.columns.str.strip().str.replace(" ", "_").str.lower().str.replace(r"[^\w\s]", "", regex=True)
     return df
@@ -44,14 +44,14 @@ def prepare_dataframe(df):
         df[col] = pd.to_numeric(df[col], errors="coerce")
     return df
 
-# === Health & Debug ===
+# === Routes ===
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
 
 @app.get("/debug")
 def debug():
-    return {"source": "✅ main.py is running"}
+    return {"source": "🔥 main.py is ACTIVE"}
 
 @app.get("/preview")
 def preview_data(limit: int = 10):
@@ -60,20 +60,18 @@ def preview_data(limit: int = 10):
         raise HTTPException(status_code=500, detail="No preview data returned.")
     return response.data
 
-# === Request Model ===
 class VorRequest(BaseModel):
     topic: str
     city: str
     state: str
-    miles: float = 6.0
+    radius: float = 6.0
 
-# === POST /vor ===
 @app.post("/vor")
 def venue_optimization(request: VorRequest):
     topic = request.topic.strip().lower()
     city = request.city.strip().lower()
     state = request.state.strip().lower()
-    miles = request.miles
+    miles = request.radius
 
     response = supabase.table("all_events").select("*").execute()
     if not response.data:
@@ -170,8 +168,7 @@ def venue_optimization(request: VorRequest):
         })
 
     return {"results": results}
-# Trigger redeploy with POST fix
-# Trigger redeploy with POST fix
+
 
 
 
