@@ -1,21 +1,24 @@
-# main.py — Full Venue Option-INATOR Logic w/ OpenCage + Scoring + Output
+# main.py
 
 import os
-import math
 import pandas as pd
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from datetime import datetime
 from supabase import create_client, Client
+from datetime import datetime
+from geopy.distance import geodesic
+from dotenv import load_dotenv
 import requests
 
-# Load ENV
+load_dotenv()
+
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-GEOCODE_API_KEY = os.getenv("GEOCODE_API_KEY", "aed1500582ee4c28912da2a257652d89")
-
 supabase: Client = create_client(SUPABASE_URL.strip(), SUPABASE_KEY.strip())
+
+GEOCODE_API_KEY = os.getenv("OPENCAGE_API_KEY")
+GEOCODE_API_URL = "https://api.opencagedata.com/geocode/v1/json"
 
 app = FastAPI()
 app.add_middleware(
@@ -26,7 +29,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Model
 class VorRequest(BaseModel):
     topic: str
     city: str
@@ -44,26 +46,6 @@ def preview_data(limit: int = 5):
         return response.data
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-# Haversine distance in miles
-def haversine(lat1, lon1, lat2, lon2):
-    R = 3958.8
-    phi1, phi2 = math.radians(lat1), math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dlambda = math.radians(lon2 - lon1)
-    a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
-    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-
-# OpenCage forward geocoding
-def geocode_location(city: str, state: str):
-    url = "https://api.opencagedata.com/geocode/v1/json"
-    query = f"{city}, {state}"
-    params = {"key": GEOCODE_API_KEY, "q": query, "limit": 1}
-    response = requests.get(url, params=params, timeout=10)
-    if response.status_code != 200 or not response.json()["results"]:
-        raise HTTPException(status_code=500, detail="Geolocation error: Service timed out or invalid location")
-    geo = response.json()["results"][0]["geometry"]
-    return geo["lat"], geo["lng"]
 
 @app.post("/vor")
 def venue_optimization(request: VorRequest):
@@ -89,17 +71,33 @@ def venue_optimization(request: VorRequest):
         return {"message": f"No events for topic '{topic}'"}
 
     df["event_date"] = pd.to_datetime(df["event_date"], errors="coerce")
-    try:
-        city_lat, city_lon = geocode_location(request.city, request.state)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Geolocation error: {str(e)}")
+
+    def geocode_place(place: str):
+        try:
+            response = requests.get(GEOCODE_API_URL, params={
+                "key": GEOCODE_API_KEY,
+                "q": place,
+                "limit": 1
+            })
+            response.raise_for_status()
+            results = response.json().get("results", [])
+            if not results:
+                return None
+            geometry = results[0]["geometry"]
+            return geometry["lat"], geometry["lng"]
+        except Exception as e:
+            return None
+
+    origin_coords = geocode_place(f"{request.city}, {request.state}")
+    if not origin_coords:
+        raise HTTPException(status_code=500, detail="Geolocation error: Service timed out or invalid address")
 
     def is_within_radius(row):
+        venue_coords = geocode_place(f"{row['venue']}, {row['city']}, {row['state']}")
+        if not venue_coords:
+            return False
         try:
-            lat, lon = row.get("latitude"), row.get("longitude")
-            if pd.isna(lat) or pd.isna(lon):
-                return False
-            return haversine(city_lat, city_lon, lat, lon) <= request.miles
+            return geodesic(origin_coords, venue_coords).miles <= request.miles
         except:
             return False
 
@@ -169,6 +167,7 @@ def venue_optimization(request: VorRequest):
         })
 
     return {"results": results}
+
 
 
 
