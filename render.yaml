@@ -1,16 +1,15 @@
-# render.yaml — Render deployment config for FastAPI venue-optimization
 services:
   - type: web
     name: venue-webhook
     env: python
     plan: free
-    buildCommand: pip install --no-cache-dir -r requirements.txt
+    buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port 8000
     autoDeploy: true
     envVars:
       - key: SUPABASE_URL
         value: https://drcjaimdtalwvpvqbdmb.supabase.co
       - key: SUPABASE_KEY
-        value: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...  # (shortened for display)
+        value: ey...KFMw  # (keep this as-is from your working .env)
       - key: OPENCAGE_API_KEY
         value: aed1500582ee4c28912da2a257652d89
