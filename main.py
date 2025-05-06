@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Query
+from fastapi import FastAPI
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
@@ -8,20 +8,20 @@ import os
 
 app = FastAPI()
 
-# Connect to Supabase
+# 🔐 Load Supabase credentials from environment variables
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Cached dataset
+# Cached global dataframe
 df_clean = None
 
-# Fields expected to be numeric
+# Fields to treat as numeric
 numeric_fields = [
     "CPA", "CPR", "Gross_Registrants", "Attended_HH", "Registration_Max"
 ]
 
-# 🎯 Scoring weight helper
+# ⏳ Recency weight logic
 def apply_recency_weight(row):
     days_since = (datetime.now() - pd.to_datetime(row["Event_Date"])).days
     if days_since <= 30:
@@ -31,28 +31,25 @@ def apply_recency_weight(row):
     else:
         return 0.8
 
-# ✅ Load, normalize, and prepare data
+# ✅ Supabase data loader & cleaner
 def load_and_prepare_data():
     global df_clean
     response = supabase.table("all_events").select("*").execute()
     df = pd.DataFrame(response.data)
 
-    # Normalize topic labels
+    # Normalize fields
     df["Topic"] = df["Topic"].str.strip().str.lower().replace({
         "taxes_in_retirement_567": "tir",
         "estate_planning_567": "ep",
         "social_security_567": "ss"
     })
-
-    # Normalize text fields
     df["City"] = df["City"].str.strip().str.lower()
     df["State"] = df["State"].str.strip().str.upper()
 
-    # Ensure numeric conversions
     for field in numeric_fields:
         df[field] = pd.to_numeric(df[field], errors="coerce")
 
-    # Compute performance metrics
+    # Derived metrics
     df["Attendance_Rate"] = df["Attended_HH"] / df["Gross_Registrants"]
     df["Fulfillment"] = df["Attended_HH"] / (df["Registration_Max"] / 2.4)
     df["Score"] = (
@@ -65,35 +62,40 @@ def load_and_prepare_data():
 
     df_clean = df
 
-# 📥 Request model
+# 🚀 Trigger this when FastAPI app starts (Render-compatible)
+@app.on_event("startup")
+async def startup_event():
+    print("✅ Loading and preparing data from Supabase...")
+    load_and_prepare_data()
+    print(f"✅ Loaded {len(df_clean)} rows from Supabase")
+
+# 📥 Request body format
 class VORRequest(BaseModel):
     topic: str
     city: str
     state: str
     miles: Optional[int] = 6
 
-# 📤 VOR endpoint
+# 🧠 VOR endpoint (simple baseline logic)
 @app.post("/vor")
 def run_vor(request: VORRequest):
     if df_clean is None:
-        return {"error": "Data not loaded"}
+        return {"error": "Data not loaded."}
 
     topic = request.topic.strip().lower()
     city = request.city.strip().lower()
     state = request.state.strip().upper()
 
-    # Match rows with topic + city + state
-    results = df_clean[
+    filtered = df_clean[
         (df_clean["Topic"] == topic) &
         (df_clean["City"] == city) &
         (df_clean["State"] == state)
     ]
 
-    if results.empty:
-        return {"message": f"No matching rows found for {topic} in {city.title()}, {state}"}
+    if filtered.empty:
+        return {"message": f"No results for {topic.upper()} in {city.title()}, {state}"}
 
-    # Group and summarize
-    summary = results.groupby(["Venue", "City", "State"]).agg(
+    summary = filtered.groupby(["Venue", "City", "State"]).agg(
         Events=("Event_Date", "count"),
         Most_Recent_Event=("Event_Date", "max"),
         Avg_Registrants=("Gross_Registrants", "mean"),
@@ -108,14 +110,6 @@ def run_vor(request: VORRequest):
 
     return summary.head(4).to_dict(orient="records")
 
-# 🟢 Startup logic
-if __name__ == "__main__":
-    print("✅ Loading and preparing data from Supabase...")
-    load_and_prepare_data()
-    print(f"✅ Loaded {len(df_clean)} rows from Supabase")
-
-    import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000)
 
 
 
