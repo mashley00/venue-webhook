@@ -1,135 +1,122 @@
-import os
-from dotenv import load_dotenv
 from fastapi import FastAPI, Query
-from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Optional
+from datetime import datetime
 from supabase import create_client, Client
 import pandas as pd
-from datetime import datetime
-from typing import Optional
+import os
 
-# Load environment variables
-load_dotenv()
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-# Initialize app
 app = FastAPI()
 
-# CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Connect to Supabase
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Topic mapping: normalize to abbreviations
-TOPIC_MAP = {
-    'taxes_in_retirement_567': 'TIR',
-    'estate_planning_567': 'EP',
-    'social_security_567': 'SS'
-}
+# Cached dataset
+df_clean = None
 
-# Utility: calculate performance score
-def calculate_score(row, recency_weight):
-    if row["CPA"] == 0 or pd.isnull(row["CPA"]):
-        return 0
-    CPA_component = (1 / row["CPA"]) * 0.5
-    fulfillment_component = row["Fulfillment %"] * 0.3
-    attendance_component = row["Attendance Rate"] * 0.2
-    raw_score = (CPA_component + fulfillment_component + attendance_component) * recency_weight
-    return min(raw_score * 40, 40)
+# Fields expected to be numeric
+numeric_fields = [
+    "CPA", "CPR", "Gross_Registrants", "Attended_HH", "Registration_Max"
+]
 
-# Route: VOR endpoint
-@app.get("/vor")
-def get_top_venues(
-    topic: str = Query(..., description="Seminar topic abbreviation: TIR, EP, or SS"),
-    city: str = Query(...),
-    state: str = Query(...),
-    radius: int = Query(6)
-):
-    try:
-        # Fetch data
-        response = supabase.table("All Events 1").select("*").execute()
-        df = pd.DataFrame(response.data)
+# 🎯 Scoring weight helper
+def apply_recency_weight(row):
+    days_since = (datetime.now() - pd.to_datetime(row["Event_Date"])).days
+    if days_since <= 30:
+        return 1.25
+    elif 31 <= days_since <= 90:
+        return 1.0
+    else:
+        return 0.8
 
-        if df.empty:
-            return {"error": "No data returned from Supabase."}
+# ✅ Load, normalize, and prepare data
+def load_and_prepare_data():
+    global df_clean
+    response = supabase.table("all_events").select("*").execute()
+    df = pd.DataFrame(response.data)
 
-        # Normalize and map topic column
-        df["Topic"] = df["Topic"].str.strip().str.lower().map(TOPIC_MAP)
+    # Normalize topic labels
+    df["Topic"] = df["Topic"].str.strip().str.lower().replace({
+        "taxes_in_retirement_567": "tir",
+        "estate_planning_567": "ep",
+        "social_security_567": "ss"
+    })
 
-        # Filter by topic
-        df = df[df["Topic"] == topic.upper()]
-        if df.empty:
-            return {"message": f"No events found for topic {topic} in city {city}, state {state}."}
+    # Normalize text fields
+    df["City"] = df["City"].str.strip().str.lower()
+    df["State"] = df["State"].str.strip().str.upper()
 
-        # Convert date column
-        df["Event_Date"] = pd.to_datetime(df["Event_Date"], errors='coerce')
-        df = df.dropna(subset=["Event_Date"])
+    # Ensure numeric conversions
+    for field in numeric_fields:
+        df[field] = pd.to_numeric(df[field], errors="coerce")
 
-        # Location filtering
-        df = df[df["City"].str.lower() == city.lower()]
-        df = df[df["State"].str.lower() == state.lower()]
-        if df.empty:
-            return {"message": f"No matching venues found in {city}, {state}."}
+    # Compute performance metrics
+    df["Attendance_Rate"] = df["Attended_HH"] / df["Gross_Registrants"]
+    df["Fulfillment"] = df["Attended_HH"] / (df["Registration_Max"] / 2.4)
+    df["Score"] = (
+        (1 / df["CPA"]) * 0.5 +
+        df["Fulfillment"] * 0.3 +
+        df["Attendance_Rate"] * 0.2
+    ) * 40
+    df["Recency_Weight"] = df.apply(apply_recency_weight, axis=1)
+    df["Score"] *= df["Recency_Weight"]
 
-        # Calculate metrics
-        df["Attendance Rate"] = df["Attended_HH"] / df["Gross_Registrants"]
-        df["Fulfillment %"] = df["Attended_HH"] / (df["Registration_Max"] / 2.4)
-        df["CPA"] = df["CPR"] / df["Attendance Rate"]
+    df_clean = df
 
-        # Recency weight
-        today = datetime.now()
-        df["Days Ago"] = (today - df["Event_Date"]).dt.days
-        df["Recency Weight"] = df["Days Ago"].apply(
-            lambda x: 1.25 if x <= 30 else 1.0 if x <= 90 else 0.8
-        )
+# 📥 Request model
+class VORRequest(BaseModel):
+    topic: str
+    city: str
+    state: str
+    miles: Optional[int] = 6
 
-        # Score venues
-        df["Score"] = df.apply(lambda row: calculate_score(row, row["Recency Weight"]), axis=1)
+# 📤 VOR endpoint
+@app.post("/vor")
+def run_vor(request: VORRequest):
+    if df_clean is None:
+        return {"error": "Data not loaded"}
 
-        # Group and summarize
-        summary = df.groupby("Venue").agg({
-            "Event_Date": "max",
-            "Job_Number": "count",
-            "Gross_Registrants": "mean",
-            "CPA": "mean",
-            "CPR": "mean",
-            "Attendance Rate": "mean",
-            "Fulfillment %": "mean",
-            "Score": "mean",
-            "Venue_Image_Allowed": "first",
-            "Venue_Disclosure_Needed": "first"
-        }).reset_index()
+    topic = request.topic.strip().lower()
+    city = request.city.strip().lower()
+    state = request.state.strip().upper()
 
-        summary = summary.sort_values("Score", ascending=False).head(4)
+    # Match rows with topic + city + state
+    results = df_clean[
+        (df_clean["Topic"] == topic) &
+        (df_clean["City"] == city) &
+        (df_clean["State"] == state)
+    ]
 
-        # Format response
-        results = []
-        for _, row in summary.iterrows():
-            results.append({
-                "🏅 Venue": row["Venue"],
-                "📍 Location": f"{city.title()}, {state.upper()}",
-                "📅 Most Recent Event": row["Event_Date"].strftime('%Y-%m-%d'),
-                "🗓️ Event Count": int(row["Job_Number"]),
-                "📈 Avg. Gross Registrants": round(row["Gross_Registrants"], 1),
-                "💰 Avg. CPA": round(row["CPA"], 2),
-                "💵 Avg. CPR": round(row["CPR"], 2),
-                "📊 Attendance Rate": f"{round(row['Attendance Rate'] * 100, 1)}%",
-                "🎯 Fulfillment %": f"{round(row['Fulfillment %'] * 100, 1)}%",
-                "📸 Image Allowed": "✅" if row["Venue_Image_Allowed"] else "❌",
-                "⚠️ Disclosure Needed": "✅" if row["Venue_Disclosure_Needed"] else "❌",
-                "🥇 Score": f"{round(row['Score'], 2)}/40"
-            })
+    if results.empty:
+        return {"message": f"No matching rows found for {topic} in {city.title()}, {state}"}
 
-        return {"results": results}
+    # Group and summarize
+    summary = results.groupby(["Venue", "City", "State"]).agg(
+        Events=("Event_Date", "count"),
+        Most_Recent_Event=("Event_Date", "max"),
+        Avg_Registrants=("Gross_Registrants", "mean"),
+        Avg_CPA=("CPA", "mean"),
+        Avg_CPR=("CPR", "mean"),
+        Avg_Attendance_Rate=("Attendance_Rate", "mean"),
+        Avg_Fulfillment=("Fulfillment", "mean"),
+        Avg_Score=("Score", "mean"),
+        Image_Allowed=("Venue_Image_Allowed", "last"),
+        Disclosure_Needed=("Venue_Disclosure_Needed", "last")
+    ).reset_index().sort_values(by="Avg_Score", ascending=False)
 
-    except Exception as e:
-        return {"error": str(e)}
+    return summary.head(4).to_dict(orient="records")
+
+# 🟢 Startup logic
+if __name__ == "__main__":
+    print("✅ Loading and preparing data from Supabase...")
+    load_and_prepare_data()
+    print(f"✅ Loaded {len(df_clean)} rows from Supabase")
+
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000)
+
 
 
 
