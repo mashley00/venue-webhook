@@ -7,8 +7,8 @@ import pandas as pd
 import os
 
 # ✅ Log environment variables for debugging
-print(f"✅ SUPABASE_URL raw: {repr(os.getenv('SUPABASE_URL'))}")
-print(f"✅ SUPABASE_KEY raw: {repr(os.getenv('SUPABASE_KEY')[:12])}...")
+print(f"✅ SUPABASE_URL raw: {repr(os.getenv('SUPABASE_URL', '')[:50])}")
+print(f"✅ SUPABASE_KEY raw: {repr(os.getenv('SUPABASE_KEY', '')[:12])}...")
 
 app = FastAPI()
 
@@ -17,88 +17,73 @@ SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "").strip()
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# 📦 Cached global dataframe
+# 🧠 Cached global dataframe
 df_clean = None
 
-# 📊 Fields to treat as numeric
+# 🔢 Fields to treat as numeric
 numeric_fields = [
     "CPA", "CPR", "Gross_Registrants", "Attended_HH", "Registration_Max"
 ]
 
 # ⏳ Recency weight logic
-def apply_recency_weight(days_old: int) -> float:
-    if days_old <= 30:
-        return 1.25
-    elif days_old <= 90:
+def apply_recency_weight(event_date_str: str) -> float:
+    try:
+        event_date = datetime.strptime(event_date_str, "%A, %B %d, %Y")
+        days_ago = (datetime.now() - event_date).days
+        if days_ago <= 30:
+            return 1.25
+        elif days_ago <= 90:
+            return 1.0
+        else:
+            return 0.8
+    except Exception:
         return 1.0
-    else:
-        return 0.8
 
-# 🚀 Startup event to load and clean data
+# 🚀 Data load on startup
 @app.on_event("startup")
 def startup_event():
-    print("✅ Loading and preparing data from Supabase...")
     load_and_prepare_data()
 
-# 🧹 Load and clean Supabase data
+# 📥 Load & clean Supabase data
 def load_and_prepare_data():
     global df_clean
-    response = supabase.table("All Events 1").select("*").execute()
+    print("✅ Loading and preparing data from Supabase...")
+
+    # ⚠️ Fix: quoted table name for case/space-sensitive access
+    response = supabase.table('"All Events 1"').select("*").execute()
+    
     if not response.data:
         raise Exception("⚠️ No data returned from Supabase.")
 
     df = pd.DataFrame(response.data)
 
-    # ✅ Rename columns for standardization
-    df.columns = df.columns.str.replace(" ", "_").str.replace("-", "_")
+    # ⛏️ Clean column names (optional, depending on your structure)
+    df.columns = [col.strip().replace(" ", "_").replace("-", "_") for col in df.columns]
 
-    # 🎯 Normalize topic
-    if "Topic" in df.columns:
-        df["Topic"] = df["Topic"].str.lower().str.strip()
-        df["Topic"] = df["Topic"].replace({
-            "taxes_in_retirement_567": "TIR",
-            "estate_planning_567": "EP",
-            "social_security_567": "SS",
-        })
+    # 🧽 Convert numerics
+    for field in numeric_fields:
+        if field in df.columns:
+            df[field] = pd.to_numeric(df[field], errors="coerce")
 
-    # 🔢 Convert numeric fields
-    for col in numeric_fields:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
+    # 🧮 Derived metrics
+    if all(col in df.columns for col in ["Attended_HH", "Gross_Registrants"]):
+        df["Attendance_Rate"] = df["Attended_HH"] / df["Gross_Registrants"]
 
-    # 📅 Convert Event_Date to datetime
-    if "Event_Date" in df.columns:
-        df["Event_Date"] = pd.to_datetime(df["Event_Date"], errors="coerce")
+    if all(col in df.columns for col in ["CPA", "Registration_Max", "Attended_HH"]):
+        df["Fulfillment_Rate"] = df["Attended_HH"] / (df["Registration_Max"] / 2.4)
 
-    # 📉 Filter out empty events
-    df_clean = df.dropna(subset=["Event_Date", "Topic", "City", "State"])
-    print(f"✅ Loaded {len(df_clean)} valid rows.")
+    # 🎯 Apply recency weighting
+    df["Recency_Weight"] = df["Event_Date"].apply(apply_recency_weight)
 
-# 🔍 Search request model
-class SearchRequest(BaseModel):
-    topic: str
-    city: str
-    state: str
-    miles: Optional[int] = 6
+    # 🧼 Drop rows with essential missing values
+    df_clean = df.dropna(subset=["Venue", "City", "State", "Topic"])
 
-# 📡 Basic ping
+    print(f"✅ Loaded {len(df_clean)} cleaned records.")
+
+# 📡 Health check route
 @app.get("/")
-def read_root():
-    return {"message": "Venue Option-INATOR is live!"}
-
-# 🔍 Example endpoint
-@app.post("/search")
-def search_venues(request: SearchRequest):
-    return {
-        "status": "OK",
-        "input": {
-            "topic": request.topic,
-            "city": request.city,
-            "state": request.state,
-            "miles": request.miles
-        },
-        "results": []
-    }
+def root():
+    return {"message": "AU Venue-Option-INATOR is running and ready! ✅"}
 
 
 
