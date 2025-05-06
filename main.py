@@ -13,11 +13,7 @@ load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-print("🔧 Supabase URL:", bool(SUPABASE_URL))
-print("🔧 Supabase Key:", bool(SUPABASE_KEY))
-
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-print("✅ Supabase client created")
 
 # === App setup ===
 app = FastAPI()
@@ -48,17 +44,15 @@ def prepare_dataframe(df):
         df[col] = pd.to_numeric(df[col], errors="coerce")
     return df
 
-# === Health check ===
+# === Routes ===
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
 
-# === Debug route to confirm correct file ===
 @app.get("/debug")
 def debug():
     return {"source": "🔥 main.py is ACTIVE"}
 
-# === Data preview ===
 @app.get("/preview")
 def preview_data(limit: int = 10):
     response = supabase.table("all_events").select("*").limit(limit).execute()
@@ -66,24 +60,19 @@ def preview_data(limit: int = 10):
         raise HTTPException(status_code=500, detail="No preview data returned.")
     return response.data
 
-# === Request model ===
 class VorRequest(BaseModel):
     topic: str
     city: str
     state: str
     miles: float = 6.0
 
-# === POST /vor ===
 @app.post("/vor")
 def venue_optimization(request: VorRequest):
-    print("📥 Received:", request.dict())
-
     topic = request.topic.strip().lower()
     city = request.city.strip().lower()
     state = request.state.strip().lower()
     miles = request.miles
 
-    # Pull data
     response = supabase.table("all_events").select("*").execute()
     if not response.data:
         raise HTTPException(status_code=500, detail="No data returned from Supabase.")
@@ -96,7 +85,6 @@ def venue_optimization(request: VorRequest):
     if df.empty:
         return {"message": f"No {topic.upper()} data available for evaluation."}
 
-    # Geocode city
     from geopy.geocoders import Nominatim
     geolocator = Nominatim(user_agent="vor_locator")
     location = geolocator.geocode(f"{city}, {state}")
@@ -180,6 +168,7 @@ def venue_optimization(request: VorRequest):
         })
 
     return {"results": results}
+
 
 
 
