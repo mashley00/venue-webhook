@@ -8,22 +8,16 @@ from datetime import datetime
 from geopy.distance import geodesic
 from dotenv import load_dotenv
 
-# === Load env vars and init Supabase ===
+# === Load environment variables ===
 load_dotenv()
-
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-print("🔧 Supabase URL loaded:", bool(SUPABASE_URL))
-print("🔧 Supabase KEY loaded:", bool(SUPABASE_KEY))
+print("🔧 Supabase URL:", bool(SUPABASE_URL))
+print("🔧 Supabase Key:", bool(SUPABASE_KEY))
 
-try:
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-    print("✅ Supabase client created")
-except Exception as e:
-    print("❌ Failed to create Supabase client:", e)
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# === FastAPI setup ===
 app = FastAPI()
 
 app.add_middleware(
@@ -34,7 +28,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# === Utility Functions ===
+# === Utils ===
 def clean_columns(df):
     df.columns = df.columns.str.strip().str.replace(" ", "_").str.lower().str.replace(r"[^\w\s]", "", regex=True)
     return df
@@ -59,7 +53,6 @@ def prepare_dataframe(df):
 def health_check():
     return {"status": "ok"}
 
-# === Preview ===
 @app.get("/preview")
 def preview_data(limit: int = 10):
     response = supabase.table("all_events").select("*").limit(limit).execute()
@@ -67,90 +60,71 @@ def preview_data(limit: int = 10):
         raise HTTPException(status_code=500, detail="No preview data returned.")
     return response.data
 
-# === Request Model ===
+# === VOR POST ===
 class VorRequest(BaseModel):
     topic: str
     city: str
     state: str
     miles: float = 6.0
 
-# === Main Endpoint ===
 @app.post("/vor")
 def venue_optimization(request: VorRequest):
-    print("📥 Received VOR Request:", request)
-
-    topic = request.topic.strip().lower()
-    city = request.city.strip().lower()
-    state = request.state.strip().lower()
+    print("📥 Incoming request:", request)
+    topic = request.topic.lower()
+    city = request.city.lower()
+    state = request.state.lower()
     miles = request.miles
 
-    try:
-        response = supabase.table("all_events").select("*").execute()
-    except Exception as e:
-        print("❌ Error fetching from Supabase:", e)
-        raise HTTPException(status_code=500, detail="Supabase query failed")
-
+    response = supabase.table("all_events").select("*").execute()
     if not response.data:
-        raise HTTPException(status_code=500, detail="No data returned from Supabase.")
+        raise HTTPException(status_code=500, detail="No data from Supabase")
 
     df = pd.DataFrame(response.data)
     if df.empty:
-        raise HTTPException(status_code=500, detail="Supabase dataset is empty.")
+        raise HTTPException(status_code=500, detail="Supabase returned empty dataset")
 
     df = prepare_dataframe(df)
     df = df[df["topic"].str.lower() == topic]
 
-    print(f"🔍 Filtered to topic '{topic}', rows remaining: {len(df)}")
-
     if df.empty:
-        return {"message": f"No {topic.upper()} data available for evaluation."}
+        return {"message": f"No {topic.upper()} records found"}
 
-    # Geolocate input city
-    try:
-        from geopy.geocoders import Nominatim
-        geolocator = Nominatim(user_agent="vor_locator")
-        location = geolocator.geocode(f"{city}, {state}")
-        if location is None:
-            print("❌ Could not geocode city")
-            return {"error": f"Could not locate {city}, {state}"}
-        city_coords = (location.latitude, location.longitude)
-        print("📍 City coordinates:", city_coords)
-    except Exception as e:
-        print("❌ Geolocation error:", e)
-        return {"error": "Failed to geolocate city"}
+    # Geolocate city
+    from geopy.geocoders import Nominatim
+    geolocator = Nominatim(user_agent="vor_app")
+    city_location = geolocator.geocode(f"{city}, {state}")
+    if not city_location:
+        return {"error": "Invalid city/state"}
+
+    city_coords = (city_location.latitude, city_location.longitude)
 
     def is_within_radius(row):
         try:
-            venue_coords = geolocator.geocode(f"{row['venue']}, {row['city']}, {row['state']}")
-            if venue_coords is None:
-                print(f"⚠️ Skipping venue (no geocode): {row['venue']}")
-                return False
-            venue_coords = (venue_coords.latitude, venue_coords.longitude)
-            return geodesic(city_coords, venue_coords).miles <= miles
-        except Exception as e:
-            print(f"❌ Error geocoding venue '{row['venue']}':", e)
+            loc = geolocator.geocode(f"{row['venue']}, {row['city']}, {row['state']}")
+            if loc:
+                venue_coords = (loc.latitude, loc.longitude)
+                return geodesic(city_coords, venue_coords).miles <= miles
+        except:
             return False
+        return False
 
     df = df[df.apply(is_within_radius, axis=1)]
-
-    print(f"✅ Venues within {miles} miles: {len(df)}")
-
     if df.empty:
-        return {"message": f"No venues found within {miles} miles of {city.title()}, {state.upper()}."}
+        return {"message": "No venues within radius"}
 
     df["event_age_days"] = (datetime.now() - df["event_date"]).dt.days
 
     def score_row(row):
         cpa = row.get("cpa", 0)
-        att_rate = row.get("attendance_rate", 0)
-        fulfilled = row.get("fulfillment_percent", 0)
-        multiplier = 1.25 if row["event_age_days"] <= 30 else 1.0 if row["event_age_days"] <= 90 else 0.8
-        base_score = ((1 / cpa if cpa else 0) * 0.5) + (fulfilled * 0.3) + (att_rate * 0.2)
-        return round(base_score * multiplier * 40, 2)
+        rate = row.get("attendance_rate", 0)
+        fill = row.get("fulfillment_percent", 0)
+        weight = 1.25 if row["event_age_days"] <= 30 else 1.0 if row["event_age_days"] <= 90 else 0.8
+        score = ((1 / cpa if cpa else 0) * 0.5 + fill * 0.3 + rate * 0.2) * weight * 40
+        return round(score, 2)
 
     df["score"] = df.apply(score_row, axis=1)
 
-    grouped = (
+    top = (
         df.groupby("venue")
         .agg({
             "event_date": "max",
@@ -175,18 +149,16 @@ def venue_optimization(request: VorRequest):
             return ["6:00 PM on Monday", "11:00 AM on Tuesday"]
         recent["dow"] = recent["event_date"].dt.day_name()
         recent["hour"] = pd.to_datetime(recent["event_time"], errors="coerce").dt.hour
-        morning = recent[recent["hour"].isin([11])]
-        evening = recent[recent["hour"].isin([18])]
+        morning = recent[recent["hour"] == 11]
+        evening = recent[recent["hour"] == 18]
         best_morning = morning["dow"].mode()[0] if not morning.empty else "Monday"
         best_evening = evening["dow"].mode()[0] if not evening.empty else "Monday"
         return [f"11:00 AM on {best_morning}", f"6:00 PM on {best_evening}"]
 
     results = []
-    for _, row in grouped.iterrows():
-        venue = row["venue"]
-        suggestions = suggest_times(venue)
+    for _, row in top.iterrows():
         results.append({
-            "🏆 Venue": venue,
+            "🏆 Venue": row["venue"],
             "📍 Location": f"{request.city.title()}, {request.state.upper()}",
             "📅 Most Recent Event": row["event_date"].strftime("%Y-%m-%d"),
             "🗓️ Number of Events": int(row["job_number"]),
@@ -198,10 +170,9 @@ def venue_optimization(request: VorRequest):
             "📸 Image Allowed": "✅" if row["venue_image_allowed"] else "❌",
             "⚠️ Disclosure Needed": "✅" if row["venue_disclosure_needed"] else "❌",
             "🥇 Score": f"{round(row['score'], 2)} / 40",
-            "⏰ Best Times": suggestions
+            "⏰ Best Times": suggest_times(row["venue"])
         })
 
-    print("✅ Returning results:", len(results), "venues")
     return {"results": results}
 
 
