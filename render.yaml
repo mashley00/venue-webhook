@@ -10,6 +10,6 @@ services:
       - key: SUPABASE_URL
         value: https://drcjaimdtalwvpvqbdmb.supabase.co
       - key: SUPABASE_KEY
-        value: ey...KFMw  # (keep this as-is from your working .env)
+        value: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFz...
       - key: OPENCAGE_API_KEY
         value: aed1500582ee4c28912da2a257652d89
