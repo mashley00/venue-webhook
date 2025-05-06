@@ -10,7 +10,6 @@ from geopy.distance import geodesic
 from geopy.geocoders import OpenCage
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -60,10 +59,9 @@ def venue_optimization(request: VorRequest):
     except Exception:
         data = []
 
-    # Fallback if Supabase is empty
     if not data:
         try:
-            csv_url = "https://raw.githubusercontent.com/mashley00/VenueGPT/main/All_Events_23_to_25_TIR_EP_SS_UTF8.csv"
+            csv_url = "https://raw.githubusercontent.com/mashley00/VenueGPT/main/All_Events_23_to_25.csv"
             df = pd.read_csv(csv_url, encoding='utf-8')
             data = df.to_dict(orient="records")
         except Exception as e:
@@ -80,8 +78,8 @@ def venue_optimization(request: VorRequest):
 
     df["event_date"] = pd.to_datetime(df["event_date"], errors="coerce")
 
-    # ✅ FIXED: Add user_agent to OpenCage geocoder
-    geolocator = OpenCage(api_key=OPENCAGE_API_KEY, user_agent="venue-optimizer")
+    # ✅ Improved: Geolocator with timeout
+    geolocator = OpenCage(api_key=OPENCAGE_API_KEY, timeout=10)
 
     try:
         loc = geolocator.geocode(f"{request.city}, {request.state}")
@@ -104,7 +102,8 @@ def venue_optimization(request: VorRequest):
     if df.empty:
         return {"message": "No venues found within search radius."}
 
-    df["event_age_days"] = (datetime.now() - df["event_date"]).dt.days
+    # ✅ Fixed: SettingWithCopyWarnings
+    df.loc[:, "event_age_days"] = (datetime.now() - df["event_date"]).dt.days
 
     def score_row(row):
         try:
@@ -116,7 +115,7 @@ def venue_optimization(request: VorRequest):
         except:
             return 0
 
-    df["score"] = df.apply(score_row, axis=1)
+    df.loc[:, "score"] = df.apply(score_row, axis=1)
 
     grouped = (
         df.groupby("venue")
@@ -140,7 +139,8 @@ def venue_optimization(request: VorRequest):
     def suggest_times(venue):
         recent = df[df["venue"] == venue].copy()
         recent["dow"] = recent["event_date"].dt.day_name()
-        recent["hour"] = pd.to_datetime(recent["event_time"], errors="coerce").dt.hour
+        # ✅ Cleaned up with explicit `.loc` to avoid warning
+        recent.loc[:, "hour"] = pd.to_datetime(recent["event_time"], errors="coerce").dt.hour
         morning = recent[recent["hour"] == 11]
         evening = recent[recent["hour"] == 18]
         best_morning = morning["dow"].mode()[0] if not morning.empty else "Monday"
@@ -166,6 +166,7 @@ def venue_optimization(request: VorRequest):
         })
 
     return {"results": results}
+
 
 
 
