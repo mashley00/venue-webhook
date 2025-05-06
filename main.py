@@ -8,16 +8,24 @@ from datetime import datetime
 from geopy.distance import geodesic
 from dotenv import load_dotenv
 
-# Load environment variables
+# === Load env vars and init Supabase ===
 load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+print("🔧 Supabase URL loaded:", bool(SUPABASE_URL))
+print("🔧 Supabase KEY loaded:", bool(SUPABASE_KEY))
+
+try:
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    print("✅ Supabase client created")
+except Exception as e:
+    print("❌ Failed to create Supabase client:", e)
+
+# === FastAPI setup ===
 app = FastAPI()
 
-# Enable CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -26,7 +34,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Utility functions
+# === Utility Functions ===
 def clean_columns(df):
     df.columns = df.columns.str.strip().str.replace(" ", "_").str.lower().str.replace(r"[^\w\s]", "", regex=True)
     return df
@@ -46,12 +54,12 @@ def prepare_dataframe(df):
             df[col] = pd.to_numeric(df[col], errors="coerce")
     return df
 
-# Health check
+# === Health check ===
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
 
-# Preview data from Supabase
+# === Preview ===
 @app.get("/preview")
 def preview_data(limit: int = 10):
     response = supabase.table("all_events").select("*").limit(limit).execute()
@@ -59,22 +67,29 @@ def preview_data(limit: int = 10):
         raise HTTPException(status_code=500, detail="No preview data returned.")
     return response.data
 
-# Request schema
+# === Request Model ===
 class VorRequest(BaseModel):
     topic: str
     city: str
     state: str
     miles: float = 6.0
 
-# Main VOR endpoint (now correctly using POST)
+# === Main Endpoint ===
 @app.post("/vor")
 def venue_optimization(request: VorRequest):
+    print("📥 Received VOR Request:", request)
+
     topic = request.topic.strip().lower()
     city = request.city.strip().lower()
     state = request.state.strip().lower()
     miles = request.miles
 
-    response = supabase.table("all_events").select("*").execute()
+    try:
+        response = supabase.table("all_events").select("*").execute()
+    except Exception as e:
+        print("❌ Error fetching from Supabase:", e)
+        raise HTTPException(status_code=500, detail="Supabase query failed")
+
     if not response.data:
         raise HTTPException(status_code=500, detail="No data returned from Supabase.")
 
@@ -85,31 +100,40 @@ def venue_optimization(request: VorRequest):
     df = prepare_dataframe(df)
     df = df[df["topic"].str.lower() == topic]
 
+    print(f"🔍 Filtered to topic '{topic}', rows remaining: {len(df)}")
+
     if df.empty:
         return {"message": f"No {topic.upper()} data available for evaluation."}
 
-    # Geolocation
+    # Geolocate input city
     try:
         from geopy.geocoders import Nominatim
         geolocator = Nominatim(user_agent="vor_locator")
         location = geolocator.geocode(f"{city}, {state}")
         if location is None:
+            print("❌ Could not geocode city")
             return {"error": f"Could not locate {city}, {state}"}
         city_coords = (location.latitude, location.longitude)
-    except Exception:
+        print("📍 City coordinates:", city_coords)
+    except Exception as e:
+        print("❌ Geolocation error:", e)
         return {"error": "Failed to geolocate city"}
 
     def is_within_radius(row):
         try:
             venue_coords = geolocator.geocode(f"{row['venue']}, {row['city']}, {row['state']}")
             if venue_coords is None:
+                print(f"⚠️ Skipping venue (no geocode): {row['venue']}")
                 return False
             venue_coords = (venue_coords.latitude, venue_coords.longitude)
             return geodesic(city_coords, venue_coords).miles <= miles
-        except:
+        except Exception as e:
+            print(f"❌ Error geocoding venue '{row['venue']}':", e)
             return False
 
     df = df[df.apply(is_within_radius, axis=1)]
+
+    print(f"✅ Venues within {miles} miles: {len(df)}")
 
     if df.empty:
         return {"message": f"No venues found within {miles} miles of {city.title()}, {state.upper()}."}
@@ -177,6 +201,7 @@ def venue_optimization(request: VorRequest):
             "⏰ Best Times": suggestions
         })
 
+    print("✅ Returning results:", len(results), "venues")
     return {"results": results}
 
 
