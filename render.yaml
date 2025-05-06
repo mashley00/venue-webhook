@@ -3,7 +3,12 @@ services:
     name: venue-webhook
     env: python
     plan: free
-    buildCommand: ""
+    buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port 8000
-    autoDeploy: true
-
+    envVars:
+      - key: SUPABASE_URL
+        value: https://your-project.supabase.co
+      - key: SUPABASE_KEY
+        value: your_supabase_service_role_key
+      - key: OPENCAGE_KEY
+        value: your_opencage_api_key
