@@ -8,7 +8,7 @@ from datetime import datetime
 from geopy.distance import geodesic
 from dotenv import load_dotenv
 
-# === Load environment variables ===
+# === Load environment ===
 load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -17,7 +17,9 @@ print("🔧 Supabase URL:", bool(SUPABASE_URL))
 print("🔧 Supabase Key:", bool(SUPABASE_KEY))
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+print("✅ Supabase client created")
 
+# === App setup ===
 app = FastAPI()
 
 app.add_middleware(
@@ -36,16 +38,14 @@ def clean_columns(df):
 def prepare_dataframe(df):
     df = clean_columns(df)
     for col in ["event_date", "marketing_start_date"]:
-        if col in df.columns:
-            df[col] = pd.to_datetime(df[col], errors="coerce")
+        df[col] = pd.to_datetime(df[col], errors="coerce")
     numeric_cols = [
         "registration_max", "fulfillment_percent", "net_registrants", "gross_registrants",
         "fb_registrants", "fb_cpr", "attended_hh", "walk_ins", "attendance_rate", "cpa",
         "fb_days_running", "fb_impressions", "cpm", "fb_reach"
     ]
     for col in numeric_cols:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
+        df[col] = pd.to_numeric(df[col], errors="coerce")
     return df
 
 # === Health check ===
@@ -53,6 +53,12 @@ def prepare_dataframe(df):
 def health_check():
     return {"status": "ok"}
 
+# === Debug route to confirm correct file ===
+@app.get("/debug")
+def debug():
+    return {"source": "🔥 main.py is ACTIVE"}
+
+# === Data preview ===
 @app.get("/preview")
 def preview_data(limit: int = 10):
     response = supabase.table("all_events").select("*").limit(limit).execute()
@@ -60,57 +66,57 @@ def preview_data(limit: int = 10):
         raise HTTPException(status_code=500, detail="No preview data returned.")
     return response.data
 
-# === VOR POST ===
+# === Request model ===
 class VorRequest(BaseModel):
     topic: str
     city: str
     state: str
     miles: float = 6.0
 
+# === POST /vor ===
 @app.post("/vor")
 def venue_optimization(request: VorRequest):
-    print("📥 Incoming request:", request)
-    topic = request.topic.lower()
-    city = request.city.lower()
-    state = request.state.lower()
+    print("📥 Received:", request.dict())
+
+    topic = request.topic.strip().lower()
+    city = request.city.strip().lower()
+    state = request.state.strip().lower()
     miles = request.miles
 
+    # Pull data
     response = supabase.table("all_events").select("*").execute()
     if not response.data:
-        raise HTTPException(status_code=500, detail="No data from Supabase")
-
+        raise HTTPException(status_code=500, detail="No data returned from Supabase.")
     df = pd.DataFrame(response.data)
     if df.empty:
-        raise HTTPException(status_code=500, detail="Supabase returned empty dataset")
+        raise HTTPException(status_code=500, detail="Supabase dataset is empty.")
 
     df = prepare_dataframe(df)
     df = df[df["topic"].str.lower() == topic]
-
     if df.empty:
-        return {"message": f"No {topic.upper()} records found"}
+        return {"message": f"No {topic.upper()} data available for evaluation."}
 
-    # Geolocate city
+    # Geocode city
     from geopy.geocoders import Nominatim
-    geolocator = Nominatim(user_agent="vor_app")
-    city_location = geolocator.geocode(f"{city}, {state}")
-    if not city_location:
-        return {"error": "Invalid city/state"}
-
-    city_coords = (city_location.latitude, city_location.longitude)
+    geolocator = Nominatim(user_agent="vor_locator")
+    location = geolocator.geocode(f"{city}, {state}")
+    if location is None:
+        return {"error": f"Could not locate {city}, {state}"}
+    city_coords = (location.latitude, location.longitude)
 
     def is_within_radius(row):
         try:
-            loc = geolocator.geocode(f"{row['venue']}, {row['city']}, {row['state']}")
-            if loc:
-                venue_coords = (loc.latitude, loc.longitude)
-                return geodesic(city_coords, venue_coords).miles <= miles
+            venue_loc = geolocator.geocode(f"{row['venue']}, {row['city']}, {row['state']}")
+            if not venue_loc:
+                return False
+            venue_coords = (venue_loc.latitude, venue_loc.longitude)
+            return geodesic(city_coords, venue_coords).miles <= miles
         except:
             return False
-        return False
 
     df = df[df.apply(is_within_radius, axis=1)]
     if df.empty:
-        return {"message": "No venues within radius"}
+        return {"message": f"No venues found within {miles} miles of {city.title()}, {state.upper()}."}
 
     df["event_age_days"] = (datetime.now() - df["event_date"]).dt.days
 
@@ -124,7 +130,7 @@ def venue_optimization(request: VorRequest):
 
     df["score"] = df.apply(score_row, axis=1)
 
-    top = (
+    grouped = (
         df.groupby("venue")
         .agg({
             "event_date": "max",
@@ -156,7 +162,7 @@ def venue_optimization(request: VorRequest):
         return [f"11:00 AM on {best_morning}", f"6:00 PM on {best_evening}"]
 
     results = []
-    for _, row in top.iterrows():
+    for _, row in grouped.iterrows():
         results.append({
             "🏆 Venue": row["venue"],
             "📍 Location": f"{request.city.title()}, {request.state.upper()}",
@@ -174,7 +180,6 @@ def venue_optimization(request: VorRequest):
         })
 
     return {"results": results}
-
 
 
 
