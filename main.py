@@ -10,6 +10,7 @@ from geopy.distance import geodesic
 from geopy.geocoders import OpenCage
 from dotenv import load_dotenv
 
+# Load environment variables
 load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -62,7 +63,7 @@ def venue_optimization(request: VorRequest):
     # Fallback if Supabase is empty
     if not data:
         try:
-            csv_url = "https://raw.githubusercontent.com/mashley00/VenueGPT/refs/heads/main/All%20Events%2023%20to%2025%20TIR%20EP%20SS%20CSV%20UTF%208.csv"
+            csv_url = "https://raw.githubusercontent.com/mashley00/VenueGPT/main/All_Events_23_to_25_TIR_EP_SS_UTF8.csv"
             df = pd.read_csv(csv_url, encoding='utf-8')
             data = df.to_dict(orient="records")
         except Exception as e:
@@ -79,8 +80,8 @@ def venue_optimization(request: VorRequest):
 
     df["event_date"] = pd.to_datetime(df["event_date"], errors="coerce")
 
-    # Geolocation
-    geolocator = OpenCage(api_key=OPENCAGE_API_KEY)
+    # ✅ FIXED: Add user_agent to OpenCage geocoder
+    geolocator = OpenCage(api_key=OPENCAGE_API_KEY, user_agent="venue-optimizer")
 
     try:
         loc = geolocator.geocode(f"{request.city}, {request.state}")
@@ -165,6 +166,7 @@ def venue_optimization(request: VorRequest):
         })
 
     return {"results": results}
+
 
 
 
