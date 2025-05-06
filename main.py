@@ -1,6 +1,5 @@
 import os
 import pandas as pd
-import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -59,9 +58,10 @@ def venue_optimization(request: VorRequest):
     except Exception:
         data = []
 
+    # Fallback if Supabase is empty
     if not data:
         try:
-            csv_url = "https://raw.githubusercontent.com/mashley00/VenueGPT/main/All_Events_23_to_25.csv"
+            csv_url = "https://raw.githubusercontent.com/mashley00/VenueGPT/main/all_events_23_25.csv"
             df = pd.read_csv(csv_url, encoding='utf-8')
             data = df.to_dict(orient="records")
         except Exception as e:
@@ -78,8 +78,8 @@ def venue_optimization(request: VorRequest):
 
     df["event_date"] = pd.to_datetime(df["event_date"], errors="coerce")
 
-    # ✅ Improved: Geolocator with timeout
-    geolocator = OpenCage(api_key=OPENCAGE_API_KEY, timeout=10)
+    # Geolocation
+    geolocator = OpenCage(api_key=OPENCAGE_API_KEY)
 
     try:
         loc = geolocator.geocode(f"{request.city}, {request.state}")
@@ -102,8 +102,7 @@ def venue_optimization(request: VorRequest):
     if df.empty:
         return {"message": "No venues found within search radius."}
 
-    # ✅ Fixed: SettingWithCopyWarnings
-    df.loc[:, "event_age_days"] = (datetime.now() - df["event_date"]).dt.days
+    df["event_age_days"] = (datetime.now() - df["event_date"]).dt.days
 
     def score_row(row):
         try:
@@ -115,7 +114,7 @@ def venue_optimization(request: VorRequest):
         except:
             return 0
 
-    df.loc[:, "score"] = df.apply(score_row, axis=1)
+    df["score"] = df.apply(score_row, axis=1)
 
     grouped = (
         df.groupby("venue")
@@ -139,8 +138,7 @@ def venue_optimization(request: VorRequest):
     def suggest_times(venue):
         recent = df[df["venue"] == venue].copy()
         recent["dow"] = recent["event_date"].dt.day_name()
-        # ✅ Cleaned up with explicit `.loc` to avoid warning
-        recent.loc[:, "hour"] = pd.to_datetime(recent["event_time"], errors="coerce").dt.hour
+        recent["hour"] = pd.to_datetime(recent["event_time"], errors="coerce").dt.hour
         morning = recent[recent["hour"] == 11]
         evening = recent[recent["hour"] == 18]
         best_morning = morning["dow"].mode()[0] if not morning.empty else "Monday"
@@ -166,6 +164,7 @@ def venue_optimization(request: VorRequest):
         })
 
     return {"results": results}
+
 
 
 
