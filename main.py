@@ -6,10 +6,12 @@ from pydantic import BaseModel
 from supabase import create_client, Client
 from datetime import datetime
 from geopy.distance import geodesic
+from dotenv import load_dotenv
 
-# === Get environment variables injected by Render ===
-SUPABASE_URL = os.environ["SUPABASE_URL"]
-SUPABASE_KEY = os.environ["SUPABASE_KEY"]
+# === Load environment ===
+load_dotenv()
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # === App setup ===
@@ -81,14 +83,18 @@ def venue_optimization(request: VorRequest):
 
     from geopy.geocoders import Nominatim
     geolocator = Nominatim(user_agent="vor_locator")
-    location = geolocator.geocode(f"{city}, {state}")
-    if location is None:
-        return {"error": f"Could not locate {city}, {state}"}
-    city_coords = (location.latitude, location.longitude)
+
+    try:
+        location = geolocator.geocode(f"{city}, {state}", timeout=10)
+        if location is None:
+            raise ValueError("Location not found.")
+        city_coords = (location.latitude, location.longitude)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Geolocation failed for {city}, {state}. Error: {str(e)}")
 
     def is_within_radius(row):
         try:
-            venue_loc = geolocator.geocode(f"{row['venue']}, {row['city']}, {row['state']}")
+            venue_loc = geolocator.geocode(f"{row['venue']}, {row['city']}, {row['state']}", timeout=10)
             if not venue_loc:
                 return False
             venue_coords = (venue_loc.latitude, venue_loc.longitude)
@@ -162,5 +168,6 @@ def venue_optimization(request: VorRequest):
         })
 
     return {"results": results}
+
 
 
