@@ -7,12 +7,15 @@ from supabase import create_client, Client
 from datetime import datetime
 from geopy.distance import geodesic
 from dotenv import load_dotenv
+from geopy.geocoders import Nominatim
 
 # === Load environment ===
 load_dotenv()
-SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "").strip()
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise Exception("Missing Supabase environment variables.")
+supabase: Client = create_client(SUPABASE_URL.strip(), SUPABASE_KEY.strip())
 
 # === App setup ===
 app = FastAPI()
@@ -24,22 +27,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-def clean_columns(df):
-    df.columns = df.columns.str.strip().str.replace(" ", "_").str.lower().str.replace(r"[^\w\s]", "", regex=True)
-    return df
-
-def prepare_dataframe(df):
-    df = clean_columns(df)
-    for col in ["event_date", "marketing_start_date"]:
-        df[col] = pd.to_datetime(df[col], errors="coerce")
-    numeric_cols = [
-        "registration_max", "fulfillment_percent", "net_registrants", "gross_registrants",
-        "fb_registrants", "fb_cpr", "attended_hh", "walk_ins", "attendance_rate", "cpa",
-        "fb_days_running", "fb_impressions", "cpm", "fb_reach"
-    ]
-    for col in numeric_cols:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-    return df
+class VorRequest(BaseModel):
+    topic: str
+    city: str
+    state: str
+    miles: float = 6.0
 
 @app.get("/health")
 def health_check():
@@ -47,54 +39,54 @@ def health_check():
 
 @app.get("/debug")
 def debug():
-    return {"source": "🔥 main.py is ACTIVE"}
+    return {"message": "main.py is active and deployed"}
 
 @app.get("/preview")
-def preview_data(limit: int = 10):
-    response = supabase.table("all_events").select("*").limit(limit).execute()
-    if not response.data:
-        raise HTTPException(status_code=500, detail="No preview data returned.")
-    return response.data
-
-class VorRequest(BaseModel):
-    topic: str
-    city: str
-    state: str
-    miles: float = 6.0
+def preview_data(limit: int = 5):
+    try:
+        response = supabase.table("all_events").select("*").limit(limit).execute()
+        return response.data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/vor")
 def venue_optimization(request: VorRequest):
     topic_map = {
-        "tir": "taxes_in_retirement_567",
-        "ep": "estate_planning_567",
-        "ss": "social_security_567"
+        "TIR": "taxes_in_retirement_567",
+        "EP": "estate_planning_567",
+        "SS": "social_security_567"
     }
+    topic_key = topic_map.get(request.topic.upper())
+    if not topic_key:
+        raise HTTPException(status_code=400, detail="Invalid topic code.")
 
-    topic_input = request.topic.strip().lower()
-    topic = topic_map.get(topic_input, topic_input)
+    try:
+        data = supabase.table("all_events").select("*").execute().data
+        df = pd.DataFrame(data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Supabase fetch error: {str(e)}")
 
-    city = request.city.strip().lower()
-    state = request.state.strip().lower()
-    miles = request.miles
-
-    response = supabase.table("all_events").select("*").execute()
-    if not response.data:
-        raise HTTPException(status_code=500, detail="No data returned from Supabase.")
-    df = pd.DataFrame(response.data)
     if df.empty:
-        raise HTTPException(status_code=500, detail="Supabase dataset is empty.")
+        return {"message": "No events data found."}
 
-    df = prepare_dataframe(df)
-    df = df[df["topic"].str.lower() == topic]
+    df.columns = df.columns.str.strip().str.lower().str.replace(" ", "_").str.replace(r"[^\w\s]", "", regex=True)
+    df = df[df["topic"].str.lower() == topic_key.lower()]
+
     if df.empty:
-        return {"message": f"No {topic_input.upper()} data available for evaluation."}
+        return {"message": f"No events found for topic: {request.topic}"}
 
-    from geopy.geocoders import Nominatim
-    geolocator = Nominatim(user_agent="vor_locator")
-    location = geolocator.geocode(f"{city}, {state}")
-    if location is None:
-        return {"error": f"Could not locate {city}, {state}"}
-    city_coords = (location.latitude, location.longitude)
+    for col in ["event_date"]:
+        df[col] = pd.to_datetime(df[col], errors="coerce")
+
+    city_coords = None
+    try:
+        geolocator = Nominatim(user_agent="vor_locator")
+        city_location = geolocator.geocode(f"{request.city}, {request.state}")
+        if not city_location:
+            raise ValueError()
+        city_coords = (city_location.latitude, city_location.longitude)
+    except:
+        return {"error": f"Unable to locate city: {request.city}, {request.state}"}
 
     def is_within_radius(row):
         try:
@@ -102,13 +94,13 @@ def venue_optimization(request: VorRequest):
             if not venue_loc:
                 return False
             venue_coords = (venue_loc.latitude, venue_loc.longitude)
-            return geodesic(city_coords, venue_coords).miles <= miles
+            return geodesic(city_coords, venue_coords).miles <= request.miles
         except:
             return False
 
     df = df[df.apply(is_within_radius, axis=1)]
     if df.empty:
-        return {"message": f"No venues found within {miles} miles of {city.title()}, {state.upper()}."}
+        return {"message": f"No venues found within {request.miles} miles of {request.city}, {request.state}"}
 
     df["event_age_days"] = (datetime.now() - df["event_date"]).dt.days
 
@@ -172,6 +164,7 @@ def venue_optimization(request: VorRequest):
         })
 
     return {"results": results}
+
 
 
 
