@@ -64,10 +64,22 @@ class VorRequest(BaseModel):
 
 @app.post("/vor")
 def venue_optimization(request: VorRequest):
-    topic = request.topic.strip().lower()
+    topic_input = request.topic.strip().lower()
     city = request.city.strip().lower()
     state = request.state.strip().lower()
     miles = request.miles
+
+    # Normalize topic codes
+    topic_map = {
+        "tir": "taxes_in_retirement_567",
+        "ss": "social_security_567",
+        "ep": "estate_planning_567"
+    }
+
+    if topic_input not in topic_map:
+        return {"error": f"Invalid topic '{request.topic}'. Use one of: TIR, SS, EP."}
+
+    mapped_topic = topic_map[topic_input]
 
     response = supabase.table("all_events").select("*").execute()
     if not response.data:
@@ -77,24 +89,20 @@ def venue_optimization(request: VorRequest):
         raise HTTPException(status_code=500, detail="Supabase dataset is empty.")
 
     df = prepare_dataframe(df)
-    df = df[df["topic"].str.lower() == topic]
+    df = df[df["topic"].str.lower() == mapped_topic]
     if df.empty:
-        return {"message": f"No {topic.upper()} data available for evaluation."}
+        return {"message": f"No data for topic '{mapped_topic}' found."}
 
     from geopy.geocoders import Nominatim
     geolocator = Nominatim(user_agent="vor_locator")
-
-    try:
-        location = geolocator.geocode(f"{city}, {state}", timeout=10)
-        if location is None:
-            raise ValueError("Location not found.")
-        city_coords = (location.latitude, location.longitude)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Geolocation failed for {city}, {state}. Error: {str(e)}")
+    location = geolocator.geocode(f"{city}, {state}")
+    if location is None:
+        return {"error": f"Could not locate {city}, {state}"}
+    city_coords = (location.latitude, location.longitude)
 
     def is_within_radius(row):
         try:
-            venue_loc = geolocator.geocode(f"{row['venue']}, {row['city']}, {row['state']}", timeout=10)
+            venue_loc = geolocator.geocode(f"{row['venue']}, {row['city']}, {row['state']}")
             if not venue_loc:
                 return False
             venue_coords = (venue_loc.latitude, venue_loc.longitude)
@@ -166,6 +174,9 @@ def venue_optimization(request: VorRequest):
             "🥇 Score": f"{round(row['score'], 2)} / 40",
             "⏰ Best Times": suggest_times(row["venue"])
         })
+
+    return {"results": results}
+
 
     return {"results": results}
 
