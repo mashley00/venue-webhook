@@ -1,4 +1,4 @@
-# main.py (FULL COPY)
+# main.py — FIXED: Error handling for geocoding and scoring
 
 import os
 import pandas as pd
@@ -11,13 +11,11 @@ from geopy.distance import geodesic
 from geopy.geocoders import Nominatim
 from dotenv import load_dotenv
 
-# === Load environment ===
 load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL.strip(), SUPABASE_KEY.strip())
 
-# === App setup ===
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
@@ -52,8 +50,8 @@ def venue_optimization(request: VorRequest):
         "EP": "estate_planning_567",
         "SS": "social_security_567"
     }
-
     topic = topic_map.get(request.topic.upper(), request.topic.lower())
+
     try:
         data = supabase.table("all_events").select("*").execute().data
         df = pd.DataFrame(data)
@@ -61,45 +59,48 @@ def venue_optimization(request: VorRequest):
         raise HTTPException(status_code=500, detail=f"Supabase error: {str(e)}")
 
     if df.empty:
-        return {"message": "No events found in Supabase."}
+        return {"message": "No events found."}
 
     df.columns = df.columns.str.lower().str.replace(" ", "_").str.replace(r"[^\w\s]", "", regex=True)
     df = df[df["topic"].str.lower() == topic.lower()]
     if df.empty:
-        return {"message": f"No data found for topic: {topic}"}
+        return {"message": f"No events for topic '{topic}'"}
 
-    for col in ["event_date"]:
-        df[col] = pd.to_datetime(df[col], errors="coerce")
+    df["event_date"] = pd.to_datetime(df["event_date"], errors="coerce")
 
     geolocator = Nominatim(user_agent="vor_locator")
-    loc = geolocator.geocode(f"{request.city}, {request.state}")
-    if not loc:
-        return {"error": f"Could not locate {request.city}, {request.state}"}
-    city_coords = (loc.latitude, loc.longitude)
+    try:
+        loc = geolocator.geocode(f"{request.city}, {request.state}")
+        if not loc:
+            return {"message": f"Could not geolocate {request.city}, {request.state}"}
+        city_coords = (loc.latitude, loc.longitude)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Geolocation error: {str(e)}")
 
     def is_within_radius(row):
         try:
             venue_loc = geolocator.geocode(f"{row['venue']}, {row['city']}, {row['state']}")
             if venue_loc:
-                venue_coords = (venue_loc.latitude, venue_loc.longitude)
-                return geodesic(city_coords, venue_coords).miles <= request.miles
+                return geodesic(city_coords, (venue_loc.latitude, venue_loc.longitude)).miles <= request.miles
         except:
             return False
         return False
 
     df = df[df.apply(is_within_radius, axis=1)]
     if df.empty:
-        return {"message": f"No venues found within {request.miles} miles of {request.city}, {request.state}"}
+        return {"message": "No venues found within search radius."}
 
     df["event_age_days"] = (datetime.now() - df["event_date"]).dt.days
 
     def score_row(row):
-        cpa = row.get("cpa", 0)
-        rate = row.get("attendance_rate", 0)
-        fill = row.get("fulfillment_percent", 0)
-        weight = 1.25 if row["event_age_days"] <= 30 else 1.0 if row["event_age_days"] <= 90 else 0.8
-        score = ((1 / cpa if cpa else 0) * 0.5 + fill * 0.3 + rate * 0.2) * weight * 40
-        return round(score, 2)
+        try:
+            cpa = row.get("cpa", 0)
+            rate = row.get("attendance_rate", 0)
+            fill = row.get("fulfillment_percent", 0)
+            weight = 1.25 if row["event_age_days"] <= 30 else 1.0 if row["event_age_days"] <= 90 else 0.8
+            return round(((1 / cpa if cpa else 0) * 0.5 + fill * 0.3 + rate * 0.2) * weight * 40, 2)
+        except:
+            return 0
 
     df["score"] = df.apply(score_row, axis=1)
 
@@ -124,14 +125,12 @@ def venue_optimization(request: VorRequest):
 
     def suggest_times(venue):
         recent = df[df["venue"] == venue].copy()
-        if recent.empty:
-            return ["6:00 PM on Monday", "11:00 AM on Tuesday"]
         recent["dow"] = recent["event_date"].dt.day_name()
         recent["hour"] = pd.to_datetime(recent["event_time"], errors="coerce").dt.hour
         morning = recent[recent["hour"] == 11]
         evening = recent[recent["hour"] == 18]
         best_morning = morning["dow"].mode()[0] if not morning.empty else "Monday"
-        best_evening = evening["dow"].mode()[0] if not evening.empty else "Monday"
+        best_evening = evening["dow"].mode()[0] if not evening.empty else "Tuesday"
         return [f"11:00 AM on {best_morning}", f"6:00 PM on {best_evening}"]
 
     results = []
@@ -153,6 +152,7 @@ def venue_optimization(request: VorRequest):
         })
 
     return {"results": results}
+
 
 
 
