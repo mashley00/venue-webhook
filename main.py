@@ -1,3 +1,5 @@
+# main.py (FULL COPY)
+
 import os
 import pandas as pd
 from fastapi import FastAPI, HTTPException
@@ -6,15 +8,13 @@ from pydantic import BaseModel
 from supabase import create_client, Client
 from datetime import datetime
 from geopy.distance import geodesic
-from dotenv import load_dotenv
 from geopy.geocoders import Nominatim
+from dotenv import load_dotenv
 
 # === Load environment ===
 load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-if not SUPABASE_URL or not SUPABASE_KEY:
-    raise Exception("Missing Supabase environment variables.")
 supabase: Client = create_client(SUPABASE_URL.strip(), SUPABASE_KEY.strip())
 
 # === App setup ===
@@ -37,10 +37,6 @@ class VorRequest(BaseModel):
 def health_check():
     return {"status": "ok"}
 
-@app.get("/debug")
-def debug():
-    return {"message": "main.py is active and deployed"}
-
 @app.get("/preview")
 def preview_data(limit: int = 5):
     try:
@@ -56,47 +52,40 @@ def venue_optimization(request: VorRequest):
         "EP": "estate_planning_567",
         "SS": "social_security_567"
     }
-    topic_key = topic_map.get(request.topic.upper())
-    if not topic_key:
-        raise HTTPException(status_code=400, detail="Invalid topic code.")
 
+    topic = topic_map.get(request.topic.upper(), request.topic.lower())
     try:
         data = supabase.table("all_events").select("*").execute().data
         df = pd.DataFrame(data)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Supabase fetch error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Supabase error: {str(e)}")
 
     if df.empty:
-        return {"message": "No events data found."}
+        return {"message": "No events found in Supabase."}
 
-    df.columns = df.columns.str.strip().str.lower().str.replace(" ", "_").str.replace(r"[^\w\s]", "", regex=True)
-    df = df[df["topic"].str.lower() == topic_key.lower()]
-
+    df.columns = df.columns.str.lower().str.replace(" ", "_").str.replace(r"[^\w\s]", "", regex=True)
+    df = df[df["topic"].str.lower() == topic.lower()]
     if df.empty:
-        return {"message": f"No events found for topic: {request.topic}"}
+        return {"message": f"No data found for topic: {topic}"}
 
     for col in ["event_date"]:
         df[col] = pd.to_datetime(df[col], errors="coerce")
 
-    city_coords = None
-    try:
-        geolocator = Nominatim(user_agent="vor_locator")
-        city_location = geolocator.geocode(f"{request.city}, {request.state}")
-        if not city_location:
-            raise ValueError()
-        city_coords = (city_location.latitude, city_location.longitude)
-    except:
-        return {"error": f"Unable to locate city: {request.city}, {request.state}"}
+    geolocator = Nominatim(user_agent="vor_locator")
+    loc = geolocator.geocode(f"{request.city}, {request.state}")
+    if not loc:
+        return {"error": f"Could not locate {request.city}, {request.state}"}
+    city_coords = (loc.latitude, loc.longitude)
 
     def is_within_radius(row):
         try:
             venue_loc = geolocator.geocode(f"{row['venue']}, {row['city']}, {row['state']}")
-            if not venue_loc:
-                return False
-            venue_coords = (venue_loc.latitude, venue_loc.longitude)
-            return geodesic(city_coords, venue_coords).miles <= request.miles
+            if venue_loc:
+                venue_coords = (venue_loc.latitude, venue_loc.longitude)
+                return geodesic(city_coords, venue_coords).miles <= request.miles
         except:
             return False
+        return False
 
     df = df[df.apply(is_within_radius, axis=1)]
     if df.empty:
@@ -164,6 +153,7 @@ def venue_optimization(request: VorRequest):
         })
 
     return {"results": results}
+
 
 
 
