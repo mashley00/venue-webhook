@@ -1,25 +1,22 @@
-# main.py
 import os
 import pandas as pd
+import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from supabase import create_client, Client
 from datetime import datetime
 from geopy.distance import geodesic
+from geopy.geocoders import OpenCage
 from dotenv import load_dotenv
-import requests
 
-# Load environment variables
 load_dotenv()
+
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 OPENCAGE_API_KEY = os.getenv("OPENCAGE_API_KEY")
-
-# Initialize Supabase client
 supabase: Client = create_client(SUPABASE_URL.strip(), SUPABASE_KEY.strip())
 
-# FastAPI app
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
@@ -29,7 +26,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Request schema
 class VorRequest(BaseModel):
     topic: str
     city: str
@@ -58,15 +54,24 @@ def venue_optimization(request: VorRequest):
     topic = topic_map.get(request.topic.upper(), request.topic.lower())
 
     try:
-        data = supabase.table("all_events").select("*").execute().data
-        df = pd.DataFrame(data)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Supabase error: {str(e)}")
+        response = supabase.table("all_events").select("*").execute()
+        data = response.data
+    except Exception:
+        data = []
 
+    # Fallback if Supabase is empty
+    if not data:
+        try:
+            csv_url = "https://raw.githubusercontent.com/mashley00/VenueGPT/refs/heads/main/All%20Events%2023%20to%2025%20TIR%20EP%20SS%20CSV%20UTF%208.csv"
+            df = pd.read_csv(csv_url, encoding='utf-8')
+            data = df.to_dict(orient="records")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to load fallback CSV: {str(e)}")
+
+    df = pd.DataFrame(data)
     if df.empty:
-        return {"message": "No events found."}
+        return {"message": "No event data available."}
 
-    # Normalize column names
     df.columns = df.columns.str.lower().str.replace(" ", "_").str.replace(r"[^\w\s]", "", regex=True)
     df = df[df["topic"].str.lower() == topic.lower()]
     if df.empty:
@@ -74,50 +79,29 @@ def venue_optimization(request: VorRequest):
 
     df["event_date"] = pd.to_datetime(df["event_date"], errors="coerce")
 
-    # Geocode the user's city/state
+    # Geolocation
+    geolocator = OpenCage(api_key=OPENCAGE_API_KEY)
     try:
-        res = requests.get(
-            "https://api.opencagedata.com/geocode/v1/json",
-            params={
-                "q": f"{request.city}, {request.state}",
-                "key": OPENCAGE_API_KEY,
-                "limit": 1,
-                "no_annotations": 1
-            }
-        )
-        if res.status_code != 200 or not res.json().get("results"):
+        loc = geolocator.geocode(f"{request.city}, {request.state}")
+        if not loc:
             return {"message": f"Could not geolocate {request.city}, {request.state}"}
-        city_coords = (
-            res.json()["results"][0]["geometry"]["lat"],
-            res.json()["results"][0]["geometry"]["lng"]
-        )
+        city_coords = (loc.latitude, loc.longitude)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Geolocation error: {str(e)}")
 
-    # Filter venues by distance
     def is_within_radius(row):
         try:
-            venue_query = f"{row['venue']}, {row['city']}, {row['state']}"
-            resp = requests.get(
-                "https://api.opencagedata.com/geocode/v1/json",
-                params={"q": venue_query, "key": OPENCAGE_API_KEY, "limit": 1, "no_annotations": 1}
-            )
-            results = resp.json().get("results", [])
-            if not results:
-                return False
-            venue_coords = (
-                results[0]["geometry"]["lat"],
-                results[0]["geometry"]["lng"]
-            )
-            return geodesic(city_coords, venue_coords).miles <= request.miles
+            venue_loc = geolocator.geocode(f"{row['venue']}, {row['city']}, {row['state']}")
+            if venue_loc:
+                return geodesic(city_coords, (venue_loc.latitude, venue_loc.longitude)).miles <= request.miles
         except:
             return False
+        return False
 
     df = df[df.apply(is_within_radius, axis=1)]
     if df.empty:
         return {"message": "No venues found within search radius."}
 
-    # Age-based scoring
     df["event_age_days"] = (datetime.now() - df["event_date"]).dt.days
 
     def score_row(row):
@@ -132,7 +116,6 @@ def venue_optimization(request: VorRequest):
 
     df["score"] = df.apply(score_row, axis=1)
 
-    # Aggregate top venues
     grouped = (
         df.groupby("venue")
         .agg({
