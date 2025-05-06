@@ -1,6 +1,6 @@
 import os
 import pandas as pd
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from supabase import create_client, Client
@@ -8,15 +8,16 @@ from datetime import datetime
 from geopy.distance import geodesic
 from dotenv import load_dotenv
 
+# Load environment variables
 load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 app = FastAPI()
 
+# Enable CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -25,6 +26,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Utility functions
 def clean_columns(df):
     df.columns = df.columns.str.strip().str.replace(" ", "_").str.lower().str.replace(r"[^\w\s]", "", regex=True)
     return df
@@ -34,19 +36,22 @@ def prepare_dataframe(df):
     for col in ["event_date", "marketing_start_date"]:
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], errors="coerce")
-    for col in [
+    numeric_cols = [
         "registration_max", "fulfillment_percent", "net_registrants", "gross_registrants",
         "fb_registrants", "fb_cpr", "attended_hh", "walk_ins", "attendance_rate", "cpa",
         "fb_days_running", "fb_impressions", "cpm", "fb_reach"
-    ]:
+    ]
+    for col in numeric_cols:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
     return df
 
+# Health check
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
 
+# Preview data from Supabase
 @app.get("/preview")
 def preview_data(limit: int = 10):
     response = supabase.table("all_events").select("*").limit(limit).execute()
@@ -54,12 +59,14 @@ def preview_data(limit: int = 10):
         raise HTTPException(status_code=500, detail="No preview data returned.")
     return response.data
 
+# Request schema
 class VorRequest(BaseModel):
     topic: str
     city: str
     state: str
     miles: float = 6.0
 
+# Main VOR endpoint (now correctly using POST)
 @app.post("/vor")
 def venue_optimization(request: VorRequest):
     topic = request.topic.strip().lower()
@@ -81,6 +88,7 @@ def venue_optimization(request: VorRequest):
     if df.empty:
         return {"message": f"No {topic.upper()} data available for evaluation."}
 
+    # Geolocation
     try:
         from geopy.geocoders import Nominatim
         geolocator = Nominatim(user_agent="vor_locator")
@@ -170,7 +178,6 @@ def venue_optimization(request: VorRequest):
         })
 
     return {"results": results}
-
 
 
 
