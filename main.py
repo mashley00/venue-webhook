@@ -81,6 +81,7 @@ def venue_optimization(request: VorRequest):
 
     # Geolocation
     geolocator = OpenCage(api_key=OPENCAGE_API_KEY)
+
     try:
         loc = geolocator.geocode(f"{request.city}, {request.state}")
         if not loc:
