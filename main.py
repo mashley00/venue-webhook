@@ -7,6 +7,7 @@ from supabase import create_client, Client
 from datetime import datetime
 from geopy.distance import geodesic
 from dotenv import load_dotenv
+from geopy.geocoders import Nominatim
 
 # === Load environment ===
 load_dotenv()
@@ -26,7 +27,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# === Utilities ===
+# === Utils ===
 def clean_columns(df):
     df.columns = df.columns.str.strip().str.replace(" ", "_").str.lower().str.replace(r"[^\w\s]", "", regex=True)
     return df
@@ -50,23 +51,16 @@ def health_check():
 
 @app.get("/debug")
 def debug():
-    return {"message": "🛠️ main.py is active"}
+    return {"message": "FastAPI app is active"}
 
-@app.get("/preview")
-def preview_data(limit: int = 10):
-    response = supabase.table("all_events").select("*").limit(limit).execute()
-    if not response.data:
-        raise HTTPException(status_code=500, detail="No preview data returned.")
-    return response.data
-
-# === Models ===
+# === Request Schema ===
 class VorRequest(BaseModel):
     topic: str
     city: str
     state: str
     miles: float = 6.0
 
-# ✅ FIXED: Route should be POST!
+# === POST Route ===
 @app.post("/vor")
 def venue_optimization(request: VorRequest):
     topic = request.topic.strip().lower()
@@ -74,6 +68,7 @@ def venue_optimization(request: VorRequest):
     state = request.state.strip().lower()
     miles = request.miles
 
+    # Load data
     response = supabase.table("all_events").select("*").execute()
     if not response.data:
         raise HTTPException(status_code=500, detail="No data returned from Supabase.")
@@ -86,7 +81,7 @@ def venue_optimization(request: VorRequest):
     if df.empty:
         return {"message": f"No {topic.upper()} data available for evaluation."}
 
-    from geopy.geocoders import Nominatim
+    # Geolocation filter
     geolocator = Nominatim(user_agent="vor_locator")
     location = geolocator.geocode(f"{city}, {state}")
     if location is None:
@@ -169,3 +164,4 @@ def venue_optimization(request: VorRequest):
         })
 
     return {"results": results}
+
