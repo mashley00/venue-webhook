@@ -5,3 +5,4 @@ python-dotenv==1.0.1
 supabase==1.2.0
 httpx==0.24.1
 geopy>=2.3.0
+Force full rebuild - breaking cache
