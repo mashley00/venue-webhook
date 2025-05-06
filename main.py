@@ -10,8 +10,8 @@ from dotenv import load_dotenv
 
 # === Load environment ===
 load_dotenv()
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "").strip()
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # === App setup ===
@@ -64,22 +64,18 @@ class VorRequest(BaseModel):
 
 @app.post("/vor")
 def venue_optimization(request: VorRequest):
+    topic_map = {
+        "tir": "taxes_in_retirement_567",
+        "ep": "estate_planning_567",
+        "ss": "social_security_567"
+    }
+
     topic_input = request.topic.strip().lower()
+    topic = topic_map.get(topic_input, topic_input)
+
     city = request.city.strip().lower()
     state = request.state.strip().lower()
     miles = request.miles
-
-    # Normalize topic codes
-    topic_map = {
-        "tir": "taxes_in_retirement_567",
-        "ss": "social_security_567",
-        "ep": "estate_planning_567"
-    }
-
-    if topic_input not in topic_map:
-        return {"error": f"Invalid topic '{request.topic}'. Use one of: TIR, SS, EP."}
-
-    mapped_topic = topic_map[topic_input]
 
     response = supabase.table("all_events").select("*").execute()
     if not response.data:
@@ -89,9 +85,9 @@ def venue_optimization(request: VorRequest):
         raise HTTPException(status_code=500, detail="Supabase dataset is empty.")
 
     df = prepare_dataframe(df)
-    df = df[df["topic"].str.lower() == mapped_topic]
+    df = df[df["topic"].str.lower() == topic]
     if df.empty:
-        return {"message": f"No data for topic '{mapped_topic}' found."}
+        return {"message": f"No {topic_input.upper()} data available for evaluation."}
 
     from geopy.geocoders import Nominatim
     geolocator = Nominatim(user_agent="vor_locator")
@@ -174,9 +170,6 @@ def venue_optimization(request: VorRequest):
             "🥇 Score": f"{round(row['score'], 2)} / 40",
             "⏰ Best Times": suggest_times(row["venue"])
         })
-
-    return {"results": results}
-
 
     return {"results": results}
 
