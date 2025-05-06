@@ -1,139 +1,92 @@
-import os
-from fastapi import FastAPI, HTTPException
+import pandas as pd
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from supabase import create_client, Client
-import pandas as pd
-from geopy.distance import geodesic
-import numpy as np
 from datetime import datetime
+from geopy.distance import geodesic
 
-# Initialize FastAPI app
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+print(f"✅ SUPABASE_URL raw: '{SUPABASE_URL}'")
+print(f"✅ SUPABASE_KEY raw: '{SUPABASE_KEY[:10]}...'")  # Print first 10 chars only
+
 app = FastAPI()
 
-# Enable CORS for all origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # Adjust as needed
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Global variables
-supabase: Client = None
-df: pd.DataFrame = None
-topic_mapping = {
-    "tir": "taxes_in_retirement_567",
-    "ep": "estate_planning_567",
-    "ss": "social_security_567",
-}
-TOPIC_NAMES = {
-    "tir": "Taxes in Retirement",
-    "ep": "Estate Planning",
-    "ss": "Social Security",
-}
+df = pd.DataFrame()
 
-# Load environment variables
-SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "").strip()
+def clean_columns(df):
+    df.columns = df.columns.str.strip().str.replace(" ", "_").str.replace(r"[^\w\s]", "", regex=True)
+    return df
 
-print("✅ SUPABASE_URL raw:", repr(SUPABASE_URL))
-print("✅ SUPABASE_KEY raw:", repr(SUPABASE_KEY[:10]) + "..." if SUPABASE_KEY else "❌ MISSING")
-print("✅ Loading and preparing data from Supabase...")
-
-# Data Loading and Preprocessing
 def load_and_prepare_data():
-    global df
+    print("✅ Loading and preparing data from Supabase...")
+    response = supabase.table("all_events").select("*").execute()
 
-    # Fetch data from Supabase
-    response = supabase.table("all_events_1").select("*").execute()
-    data = response.data
-    print(f"✅ Retrieved {len(data)} rows from Supabase.")
-
-    if not data:
+    if not response.data:
         raise Exception("⚠️ No data returned from Supabase.")
 
-    df_raw = pd.DataFrame(data)
+    global df
+    df = pd.DataFrame(response.data)
 
-    # Rename columns for consistency
-    df_raw = df_raw.rename(columns=lambda x: x.strip().replace(" ", "_").replace("-", "_").lower())
+    if df.empty:
+        raise Exception("⚠️ Dataframe is empty after Supabase load.")
 
-    # Normalize topic
-    df_raw["topic"] = df_raw["topic"].str.lower().str.strip()
+    df = clean_columns(df)
 
-    # Standardize column names
-    if "fb_cpr" in df_raw.columns:
-        df_raw.rename(columns={"fb_cpr": "cpr"}, inplace=True)
+    # Parse date fields
+    for date_col in ["Event_Date", "Marketing_Start_Date"]:
+        if date_col in df.columns:
+            df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
 
-    if "cost_per_verified_hh" not in df_raw.columns and "cpa" in df_raw.columns:
-        df_raw.rename(columns={"cpa": "cost_per_verified_hh"}, inplace=True)
+    for num_col in [
+        "Registration_Max", "Fulfillment_Percent", "Net_Registrants", "Gross_Registrants", "FB_Registrants",
+        "FB_CPR", "Attended_HH", "Walk_Ins", "Attendance_Rate", "CPA", "FB_Days_Running", "FB_Impressions",
+        "CPM", "FB_Reach"
+    ]:
+        if num_col in df.columns:
+            df[num_col] = pd.to_numeric(df[num_col], errors="coerce")
 
-    # Convert numeric columns
-    for col in ["cpr", "cost_per_verified_hh", "attended_hh", "gross_registrants", "registration_max"]:
-        if col in df_raw.columns:
-            df_raw[col] = pd.to_numeric(df_raw[col], errors="coerce")
+    print(f"✅ Loaded {len(df)} rows with columns: {list(df.columns)}")
 
-    # Drop rows missing key values
-    df_raw = df_raw.dropna(subset=["venue", "city", "state", "latitude", "longitude", "event_date"])
+@app.on_event("startup")
+def startup_event():
+    load_and_prepare_data()
 
-    # Add computed metrics
-    df_raw["attendance_rate"] = df_raw["attended_hh"] / df_raw["gross_registrants"]
-    df_raw["fulfillment_pct"] = df_raw["attended_hh"] / (df_raw["registration_max"] / 2.4)
-    df_raw["event_date"] = pd.to_datetime(df_raw["event_date"])
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
 
-    df = df_raw
-    print("✅ Data loaded and cleaned. Rows:", len(df))
+@app.get("/preview")
+def preview_data(limit: int = 10):
+    return df.head(limit).to_dict(orient="records")
 
-
-# Models
-class VORRequest(BaseModel):
+class VorRequest(BaseModel):
     topic: str
     city: str
     state: str
-    radius: int = 6
+    miles: float = 6.0
 
-
-# Startup
-@app.on_event("startup")
-def startup_event():
-    global supabase
-    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-    load_and_prepare_data()
-
-
-# Health Check
-@app.get("/")
-def root():
-    return {"message": "Venue Option-INATOR is live!"}
-
-
-# VOR Endpoint
 @app.post("/vor")
-def get_vor(request: VORRequest):
-    global df
-
-    topic_key = request.topic.lower()
-    topic_column_value = topic_mapping.get(topic_key)
-    if topic_column_value is None:
-        raise HTTPException(status_code=400, detail="Invalid topic.")
-
-    df_filtered = df[
-        (df["topic"] == topic_column_value) &
-        (df["city"].str.lower() == request.city.lower()) &
-        (df["state"].str.lower() == request.state.lower())
-    ]
-
-    if df_filtered.empty:
-        raise HTTPException(status_code=404, detail="No events found for given criteria.")
-
-    results = df_filtered.head(4).to_dict(orient="records")
-    return {
-        "topic": TOPIC_NAMES[topic_key],
-        "city": request.city,
-        "state": request.state,
-        "radius_miles": request.radius,
-        "results": results
-    }
+def venue_optimization(request: VorRequest):
+    # Placeholder for future VOR logic
+    return {"message": f"VOR request received for {request.topic} in {request.city}, {request.state} within {request.miles} miles."}
 
 
 
