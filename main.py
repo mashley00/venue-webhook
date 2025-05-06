@@ -1,5 +1,4 @@
-# main.py
-
+# main.py — full performance scoring + OpenCage geolocation
 import os
 import pandas as pd
 from fastapi import FastAPI, HTTPException
@@ -8,27 +7,26 @@ from pydantic import BaseModel
 from supabase import create_client, Client
 from datetime import datetime
 from geopy.distance import geodesic
-from dotenv import load_dotenv
 import requests
+from dotenv import load_dotenv
 
+# Load environment variables
 load_dotenv()
-
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+OPENCAGE_KEY = os.getenv("OPENCAGE_KEY")
+
 supabase: Client = create_client(SUPABASE_URL.strip(), SUPABASE_KEY.strip())
 
-GEOCODE_API_KEY = os.getenv("OPENCAGE_API_KEY")
-GEOCODE_API_URL = "https://api.opencagedata.com/geocode/v1/json"
-
+# FastAPI setup
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=["*"], allow_credentials=True,
+    allow_methods=["*"], allow_headers=["*"],
 )
 
+# Pydantic request model
 class VorRequest(BaseModel):
     topic: str
     city: str
@@ -47,6 +45,7 @@ def preview_data(limit: int = 5):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# Main endpoint
 @app.post("/vor")
 def venue_optimization(request: VorRequest):
     topic_map = {
@@ -56,6 +55,7 @@ def venue_optimization(request: VorRequest):
     }
     topic = topic_map.get(request.topic.upper(), request.topic.lower())
 
+    # Supabase query
     try:
         data = supabase.table("all_events").select("*").execute().data
         df = pd.DataFrame(data)
@@ -65,6 +65,7 @@ def venue_optimization(request: VorRequest):
     if df.empty:
         return {"message": "No events found."}
 
+    # Normalize
     df.columns = df.columns.str.lower().str.replace(" ", "_").str.replace(r"[^\w\s]", "", regex=True)
     df = df[df["topic"].str.lower() == topic.lower()]
     if df.empty:
@@ -72,39 +73,34 @@ def venue_optimization(request: VorRequest):
 
     df["event_date"] = pd.to_datetime(df["event_date"], errors="coerce")
 
-    def geocode_place(place: str):
+    # 🔍 Get city coordinates using OpenCage
+    def get_coords(location):
         try:
-            response = requests.get(GEOCODE_API_URL, params={
-                "key": GEOCODE_API_KEY,
-                "q": place,
-                "limit": 1
-            })
-            response.raise_for_status()
-            results = response.json().get("results", [])
-            if not results:
-                return None
-            geometry = results[0]["geometry"]
-            return geometry["lat"], geometry["lng"]
+            url = f"https://api.opencagedata.com/geocode/v1/json?q={location}&key={OPENCAGE_KEY}"
+            r = requests.get(url)
+            results = r.json()["results"]
+            if results:
+                geometry = results[0]["geometry"]
+                return (geometry["lat"], geometry["lng"])
         except Exception as e:
-            return None
+            raise HTTPException(status_code=500, detail=f"Geolocation error: {str(e)}")
+        return None
 
-    origin_coords = geocode_place(f"{request.city}, {request.state}")
-    if not origin_coords:
-        raise HTTPException(status_code=500, detail="Geolocation error: Service timed out or invalid address")
+    city_coords = get_coords(f"{request.city}, {request.state}")
+    if not city_coords:
+        return {"message": f"Could not geolocate {request.city}, {request.state}"}
 
     def is_within_radius(row):
-        venue_coords = geocode_place(f"{row['venue']}, {row['city']}, {row['state']}")
-        if not venue_coords:
-            return False
-        try:
-            return geodesic(origin_coords, venue_coords).miles <= request.miles
-        except:
-            return False
+        venue_coords = get_coords(f"{row['venue']}, {row['city']}, {row['state']}")
+        if venue_coords:
+            return geodesic(city_coords, venue_coords).miles <= request.miles
+        return False
 
     df = df[df.apply(is_within_radius, axis=1)]
     if df.empty:
         return {"message": "No venues found within search radius."}
 
+    # 🧮 Scoring
     df["event_age_days"] = (datetime.now() - df["event_date"]).dt.days
 
     def score_row(row):
@@ -119,6 +115,7 @@ def venue_optimization(request: VorRequest):
 
     df["score"] = df.apply(score_row, axis=1)
 
+    # 📊 Group and Rank
     grouped = (
         df.groupby("venue")
         .agg({
@@ -138,6 +135,7 @@ def venue_optimization(request: VorRequest):
         .head(4)
     )
 
+    # 🕰️ Suggest best times
     def suggest_times(venue):
         recent = df[df["venue"] == venue].copy()
         recent["dow"] = recent["event_date"].dt.day_name()
@@ -148,6 +146,7 @@ def venue_optimization(request: VorRequest):
         best_evening = evening["dow"].mode()[0] if not evening.empty else "Tuesday"
         return [f"11:00 AM on {best_morning}", f"6:00 PM on {best_evening}"]
 
+    # 🧾 Format output
     results = []
     for _, row in grouped.iterrows():
         results.append({
