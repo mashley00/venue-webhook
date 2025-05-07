@@ -3,13 +3,13 @@ services:
     name: venue-webhook
     env: python
     plan: free
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install --no-cache-dir -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port 8000
     autoDeploy: true
     envVars:
       - key: SUPABASE_URL
         value: https://drcjaimdtalwvpvqbdmb.supabase.co
       - key: SUPABASE_KEY
-        value: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFz...
+        value: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRyY2phaW1kdGFsd3ZwdnFiZG1iIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDY0NTgxMzMsImV4cCI6MjA2MjAzNDEzM30.9ztc3baZzHlgrCYHyDeUG7xHiwA6gyErKlPYmtzKFMw
       - key: OPENCAGE_API_KEY
         value: aed1500582ee4c28912da2a257652d89
