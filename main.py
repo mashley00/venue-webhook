@@ -10,6 +10,7 @@ from datetime import datetime
 from geopy.distance import geodesic
 from geopy.geocoders import OpenCage
 from dotenv import load_dotenv
+from io import BytesIO
 
 # Load environment variables
 load_dotenv()
@@ -48,14 +49,14 @@ def preview_data(limit: int = 5):
 
 @app.get("/csv")
 def serve_csv():
-    # Serve the Supabase-hosted CSV through Render to bypass GPT DNS issues
     url = "https://drcjaimdtalwvpvqbdmb.supabase.co/storage/v1/object/public/venue-data/all_events_23_25.csv"
-    response = requests.get(url, stream=True)
+    response = requests.get(url)
 
     if response.status_code != 200:
         raise HTTPException(status_code=500, detail="Failed to load CSV from Supabase.")
 
-    return StreamingResponse(response.raw, media_type="text/csv")
+    csv_bytes = BytesIO(response.content)
+    return StreamingResponse(csv_bytes, media_type="text/csv")
 
 @app.post("/vor")
 def venue_optimization(request: VorRequest):
@@ -164,6 +165,7 @@ def venue_optimization(request: VorRequest):
         })
 
     return {"results": results}
+
 
 
 
