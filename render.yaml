@@ -4,12 +4,12 @@ services:
     env: python
     plan: free
     buildCommand: pip install --no-cache-dir -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port 8000
+    startCommand: uvicorn main:app --host=0.0.0.0 --port=8000
     autoDeploy: true
     envVars:
       - key: SUPABASE_URL
         value: https://drcjaimdtalwvpvqbdmb.supabase.co
       - key: SUPABASE_KEY
-        value: [your Supabase key]
+        value: your_supabase_key_here
       - key: OPENCAGE_API_KEY
-        value: [your OpenCage API key]
+        value: your_opencage_key_here
