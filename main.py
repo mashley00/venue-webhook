@@ -1,18 +1,31 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from typing import List, Optional
+from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 from datetime import datetime
+import requests
+import os
+import traceback
 
 app = FastAPI()
 
-CSV_URL = "https://acquireup-venue-data.s3.us-east-2.amazonaws.com/all_events_23_25.csv"
+# Enable CORS if needed
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
+# Pydantic request model
 class VORRequest(BaseModel):
     topic: str
     city: str
     state: str
-    miles: float = 6.0
+    miles: Optional[float] = 6.0
 
+# Pydantic response model
 class VORResponse(BaseModel):
     venue: str
     city: str
@@ -30,122 +43,84 @@ class VORResponse(BaseModel):
     best_time_1: str
     best_time_2: str
 
-@app.post("/vor", response_model=list[VORResponse])
+@app.post("/vor", response_model=List[VORResponse])
 def get_vor(request: VORRequest):
     try:
-        df = pd.read_csv(CSV_URL, encoding="utf-8")
-        df.columns = (
-            df.columns
-            .str.strip()
-            .str.lower()
-            .str.replace(" ", "_")
-            .str.replace(r"[^\w\s]", "", regex=True)
-        )
+        # Load CSV from S3
+        s3_url = "https://acquireup-venue-data.s3.us-east-2.amazonaws.com/all_events_23_25.csv"
+        df = pd.read_csv(s3_url)
 
-        required_cols = [
-            'event_date', 'venue', 'job_number', 'gross_registrants',
-            'cost_per_verified_hh', 'fb_cpr', 'attended_hh',
-            'registration_max', 'venue_image_allowed', 'venue_disclosure_needed',
-            'topic', 'city', 'state'
-        ]
+        # Clean column names
+        df.columns = df.columns.str.strip().str.replace(" ", "_").str.lower()
 
-        for col in required_cols:
-            if col not in df.columns:
-                raise HTTPException(status_code=500, detail=f"Missing required column: {col}")
+        # Parse dates
+        df['event_date'] = pd.to_datetime(df['event_date'], errors='coerce')
 
-        # Normalize topic mapping
+        # Map topic
         topic_map = {
             "TIR": "taxes_in_retirement_567",
             "EP": "estate_planning_567",
             "SS": "social_security_567"
         }
+        topic_mapped = topic_map.get(request.topic.upper())
+        if not topic_mapped:
+            raise HTTPException(status_code=400, detail="Invalid topic code")
 
-        target_topic = topic_map.get(request.topic.upper(), request.topic.lower())
-
-        df["event_date"] = pd.to_datetime(df["event_date"], errors="coerce")
-        df["event_age_days"] = (datetime.now() - df["event_date"]).dt.days
-
+        # Filter
         filtered = df[
-            (df["topic"].str.lower() == target_topic) &
-            (df["city"].str.lower() == request.city.lower()) &
-            (df["state"].str.lower() == request.state.lower())
+            (df['topic'] == topic_mapped) &
+            (df['city'].str.lower() == request.city.lower()) &
+            (df['state'].str.lower() == request.state.lower())
         ]
 
         if filtered.empty:
             return []
 
-        filtered["attendance_rate"] = filtered["attended_hh"] / filtered["gross_registrants"]
-        filtered["fulfillment_pct"] = filtered["attended_hh"] / (filtered["registration_max"] / 2.4)
-        filtered["score"] = (
-            (1 / filtered["cost_per_verified_hh"]) * 0.5 +
-            filtered["fulfillment_pct"] * 0.3 +
-            filtered["attendance_rate"] * 0.2
-        )
+        # Compute fields
+        filtered['attendance_rate'] = filtered['attended_hh'] / filtered['gross_registrants']
+        filtered['fulfillment_pct'] = filtered['attended_hh'] / (filtered['registration_max'] / 2.4)
+        filtered['cost_per_verified_hh'] = filtered['fb_cpr'] / filtered['attendance_rate']
 
-        def weighted_score(row):
-            weight = 1.0
-            if row["event_age_days"] <= 30:
-                weight = 1.25
-            elif 31 <= row["event_age_days"] <= 90:
-                weight = 1.0
-            else:
-                weight = 0.8
-            return row["score"] * weight * 100  # ⬅️ Score is now on a 100-point scale
+        # Grouped stats
+        grouped = filtered.groupby('venue').agg(
+            city=('city', 'first'),
+            state=('state', 'first'),
+            most_recent_event=('event_date', 'max'),
+            number_of_events=('event_date', 'count'),
+            avg_gross_registrants=('gross_registrants', 'mean'),
+            avg_cpa=('cost_per_verified_hh', 'mean'),
+            avg_cpr=('fb_cpr', 'mean'),
+            attendance_rate=('attendance_rate', 'mean'),
+            fulfillment_pct=('fulfillment_pct', 'mean'),
+            image_allowed=('venue_image_allowed', lambda x: x.mode()[0] if not x.empty else False),
+            disclosure_needed=('venue_disclosure', lambda x: x.mode()[0] if not x.empty else False)
+        ).reset_index()
 
-        filtered["weighted_score"] = filtered.apply(weighted_score, axis=1)
+        # Score
+        grouped['score'] = (
+            (1 / grouped['avg_cpa']) * 0.5 +
+            grouped['fulfillment_pct'] * 0.3 +
+            grouped['attendance_rate'] * 0.2
+        ) * 100 / 1.0  # Convert to 100-pt scale
 
-        print("DEBUG: Available columns for aggregation:", filtered.columns.tolist())
+        # Sort
+        grouped = grouped.sort_values(by='score', ascending=False).head(4)
 
-        grouped = filtered.groupby("venue").agg({
-            "job_number": "count",
-            "event_date": "max",
-            "gross_registrants": "mean",
-            "cost_per_verified_hh": "mean",
-            "fb_cpr": "mean",
-            "attendance_rate": "mean",
-            "fulfillment_pct": "mean",
-            "venue_image_allowed": "last",
-            "venue_disclosure_needed": "last",
-            "weighted_score": "mean"
-        }).reset_index()
+        # Add time slot recs (placeholder for now)
+        grouped['best_time_1'] = "11:00am on Monday"
+        grouped['best_time_2'] = "6:00pm on Monday"
 
-        grouped = grouped.rename(columns={
-            "job_number": "number_of_events",
-            "event_date": "most_recent_event",
-            "gross_registrants": "avg_gross_registrants",
-            "cost_per_verified_hh": "avg_cpa",
-            "fb_cpr": "avg_cpr",
-            "attendance_rate": "attendance_rate",
-            "fulfillment_pct": "fulfillment_pct",
-            "weighted_score": "score"
-        })
+        # Format date
+        grouped['most_recent_event'] = grouped['most_recent_event'].dt.strftime("%Y-%m-%d")
 
-        grouped = grouped.sort_values(by="score", ascending=False).head(4)
-
-        results = []
-        for _, row in grouped.iterrows():
-            results.append(VORResponse(
-                venue=row["venue"],
-                city=request.city,
-                state=request.state,
-                most_recent_event=row["most_recent_event"].strftime("%Y-%m-%d") if not pd.isnull(row["most_recent_event"]) else "N/A",
-                number_of_events=int(row["number_of_events"]),
-                avg_gross_registrants=round(row["avg_gross_registrants"], 1),
-                avg_cpa=round(row["avg_cpa"], 2),
-                avg_cpr=round(row["avg_cpr"], 2),
-                attendance_rate=round(row["attendance_rate"], 3),
-                fulfillment_pct=round(row["fulfillment_pct"], 3),
-                image_allowed=bool(row["venue_image_allowed"]),
-                disclosure_needed=bool(row["venue_disclosure_needed"]),
-                score=round(row["score"], 1),
-                best_time_1="11:00am Monday",
-                best_time_2="6:00pm Monday"
-            ))
-
-        return results
+        # Build response
+        response = grouped.to_dict(orient='records')
+        return response
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        error_message = f"{str(e)}\n\n{traceback.format_exc()}"
+        raise HTTPException(status_code=500, detail=error_message)
+
 
 
 
