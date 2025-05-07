@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: venue-webhook
+    name: venue-webhook-2
     env: python
     plan: free
     buildCommand: pip install --no-cache-dir -r requirements.txt
@@ -10,8 +10,6 @@ services:
       - key: SUPABASE_URL
         value: https://drcjaimdtalwvpvqbdmb.supabase.co
       - key: SUPABASE_KEY
-        value: your_supabase_key_here
+        value: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRyY2phaW1kdGFsd3ZwdnFiZG1iIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDY0NTgxMzMsImV4cCI6MjA2MjAzNDEzM30.9ztc3baZzHlgrCYHyDeUG7xHiwA6gyErKlPYmtzKFMw
       - key: OPENCAGE_API_KEY
-        value: your_opencage_key_here
-      - key: S3_CSV_URL
-        value: https://acquireup-venue-data.s3.us-east-2.amazonaws.com/all_events_23_25.csv
+        value: aed1500582ee4c28912da2a257652d89
