@@ -2,7 +2,6 @@ import os
 import pandas as pd
 import requests
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from supabase import create_client, Client
@@ -11,15 +10,15 @@ from geopy.distance import geodesic
 from geopy.geocoders import OpenCage
 from dotenv import load_dotenv
 
+# Load environment variables
 load_dotenv()
-
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 OPENCAGE_API_KEY = os.getenv("OPENCAGE_API_KEY")
 
 supabase: Client = create_client(SUPABASE_URL.strip(), SUPABASE_KEY.strip())
-
 app = FastAPI()
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -56,9 +55,8 @@ def venue_optimization(request: VorRequest):
     topic = topic_map.get(request.topic.upper(), request.topic.lower())
 
     try:
-        response = supabase.table("all_events").select("*").limit(1000).execute()
+        response = supabase.table("all_events").select("*").execute()
         data = response.data
-        print(f"✅ Supabase returned {len(data)} rows")
     except Exception:
         data = []
 
@@ -67,20 +65,17 @@ def venue_optimization(request: VorRequest):
             csv_url = "https://raw.githubusercontent.com/mashley00/VenueGPT/main/all_events_23_25.csv"
             df = pd.read_csv(csv_url, encoding='utf-8')
             data = df.to_dict(orient="records")
-            print("✅ Loaded fallback CSV from GitHub")
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to load fallback CSV: {str(e)}")
 
     df = pd.DataFrame(data)
     if df.empty:
-        return JSONResponse({"message": "No event data available."})
+        return {"message": "No event data available."}
 
     df.columns = df.columns.str.lower().str.replace(" ", "_").str.replace(r"[^\w\s]", "", regex=True)
     df = df[df["topic"].str.lower() == topic.lower()]
-    print(f"🔎 Filtered for topic '{topic}': {len(df)} rows")
-
     if df.empty:
-        return JSONResponse({"message": f"No events for topic '{topic}'"})
+        return {"message": f"No events for topic '{topic}'"}
 
     df["event_date"] = pd.to_datetime(df["event_date"], errors="coerce")
 
@@ -88,7 +83,7 @@ def venue_optimization(request: VorRequest):
     try:
         loc = geolocator.geocode(f"{request.city}, {request.state}")
         if not loc:
-            return JSONResponse({"message": f"Could not geolocate {request.city}, {request.state}"})
+            return {"message": f"Could not geolocate {request.city}, {request.state}"}
         city_coords = (loc.latitude, loc.longitude)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Geolocation error: {str(e)}")
@@ -104,7 +99,7 @@ def venue_optimization(request: VorRequest):
 
     df = df[df.apply(is_within_radius, axis=1)]
     if df.empty:
-        return JSONResponse({"message": "No venues found within search radius."})
+        return {"message": "No venues found within search radius."}
 
     df.loc[:, "event_age_days"] = (datetime.now() - df["event_date"]).dt.days
 
@@ -167,7 +162,8 @@ def venue_optimization(request: VorRequest):
             "⏰ Best Times": suggest_times(row["venue"])
         })
 
-    return JSONResponse(content={"results": results})
+    return {"results": results}
+
 
 
 
