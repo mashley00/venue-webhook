@@ -5,8 +5,13 @@ from datetime import datetime
 
 app = FastAPI()
 
-# ✅ Update with your working S3 CSV URL
 CSV_URL = "https://acquireup-venue-data.s3.us-east-2.amazonaws.com/all_events_23_25.csv"
+
+TOPIC_MAP = {
+    "TIR": "taxes_in_retirement_567",
+    "EP": "estate_planning_567",
+    "SS": "social_security_567"
+}
 
 class VorRequest(BaseModel):
     topic: str
@@ -26,11 +31,17 @@ def venue_optimization(request: VorRequest):
     if df.empty:
         return {"message": "No data found."}
 
-    # Preprocessing
+    # Normalize event_date and compute age
     df["event_date"] = pd.to_datetime(df["event_date"], errors="coerce")
     df["event_age_days"] = (datetime.now() - df["event_date"]).dt.days
+
+    # ✅ Map topic abbreviation to full name
+    topic_key = request.topic.upper()
+    topic_full = TOPIC_MAP.get(topic_key, request.topic.lower())
+    df = df[df["topic"].str.lower() == topic_full]
+
+    # Filter by city/state
     df = df[
-        (df["topic"].str.lower() == request.topic.lower()) &
         (df["city"].str.lower() == request.city.lower()) &
         (df["state"].str.lower() == request.state.lower())
     ]
@@ -38,7 +49,7 @@ def venue_optimization(request: VorRequest):
     if df.empty:
         return {"message": "No matching rows for topic and city/state."}
 
-    # Calculated Fields
+    # Scoring logic
     df["attendance_rate"] = df["attended_hh"] / df["gross_registrants"]
     df["fulfillment_pct"] = df["attended_hh"] / (df["registration_max"] / 2.4)
     df["score"] = (
@@ -47,16 +58,13 @@ def venue_optimization(request: VorRequest):
         df["attendance_rate"] * 0.2
     )
 
-    # Score weight
     def weighted_score(row):
-        weight = 1.0
         if row["event_age_days"] <= 30:
-            weight = 1.25
-        elif 31 <= row["event_age_days"] <= 90:
-            weight = 1.0
+            return row["score"] * 1.25 * 40
+        elif row["event_age_days"] <= 90:
+            return row["score"] * 1.0 * 40
         else:
-            weight = 0.8
-        return row["score"] * weight * 40
+            return row["score"] * 0.8 * 40
 
     df["weighted_score"] = df.apply(weighted_score, axis=1)
 
@@ -87,7 +95,6 @@ def venue_optimization(request: VorRequest):
 
     agg = agg.sort_values(by="score", ascending=False).head(4)
 
-    # Format response
     venues = []
     for _, row in agg.iterrows():
         venues.append({
