@@ -3,6 +3,7 @@ import pandas as pd
 import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from supabase import create_client, Client
 from datetime import datetime
@@ -45,6 +46,17 @@ def preview_data(limit: int = 5):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/csv")
+def serve_csv():
+    # Serve the Supabase-hosted CSV through Render to bypass GPT DNS issues
+    url = "https://drcjaimdtalwvpvqbdmb.supabase.co/storage/v1/object/public/venue-data/all_events_23_25.csv"
+    response = requests.get(url, stream=True)
+
+    if response.status_code != 200:
+        raise HTTPException(status_code=500, detail="Failed to load CSV from Supabase.")
+
+    return StreamingResponse(response.raw, media_type="text/csv")
+
 @app.post("/vor")
 def venue_optimization(request: VorRequest):
     topic_map = {
@@ -55,24 +67,13 @@ def venue_optimization(request: VorRequest):
     topic = topic_map.get(request.topic.upper(), request.topic.lower())
 
     try:
-        response = supabase.table("all_events").select("*").execute()
-        data = response.data
-    except Exception:
-        data = []
-
-    if not data:
-        try:
-            csv_url = "https://raw.githubusercontent.com/mashley00/VenueGPT/main/all_events_23_25.csv"
-            df = pd.read_csv(csv_url, encoding='utf-8')
-            data = df.to_dict(orient="records")
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to load fallback CSV: {str(e)}")
-
-    df = pd.DataFrame(data)
-    if df.empty:
-        return {"message": "No event data available."}
+        csv_url = "https://venue-webhook.onrender.com/csv"
+        df = pd.read_csv(csv_url, encoding='utf-8')
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load CSV: {str(e)}")
 
     df.columns = df.columns.str.lower().str.replace(" ", "_").str.replace(r"[^\w\s]", "", regex=True)
+
     df = df[df["topic"].str.lower() == topic.lower()]
     if df.empty:
         return {"message": f"No events for topic '{topic}'"}
@@ -163,6 +164,7 @@ def venue_optimization(request: VorRequest):
         })
 
     return {"results": results}
+
 
 
 
