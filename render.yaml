@@ -13,3 +13,5 @@ services:
         value: your_supabase_key_here
       - key: OPENCAGE_API_KEY
         value: your_opencage_key_here
+      - key: S3_CSV_URL
+        value: https://acquireup-venue-data.s3.us-east-2.amazonaws.com/all_events_23_25.csv
