@@ -1,94 +1,118 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Query
 from pydantic import BaseModel
 import pandas as pd
-from datetime import datetime, timedelta
-import math
 import requests
+from datetime import datetime
+from typing import List, Optional
+import io
 
 app = FastAPI()
 
-S3_CSV_URL = "https://acquireup-venue-data.s3.us-east-2.amazonaws.com/all_events_23_25.csv"
-
 class VORRequest(BaseModel):
-    topic: str  # "TIR", "EP", or "SS"
+    topic: str  # "TIR", "EP", "SS"
     city: str
     state: str
-    miles: float = 6.0
+    miles: Optional[float] = 6.0
 
-@app.post("/vor")
-async def venue_optimization(req: VORRequest):
+class VenueResult(BaseModel):
+    venue: str
+    city: str
+    state: str
+    most_recent_event: str
+    number_of_events: int
+    avg_gross_registrants: float
+    avg_cpa: float
+    avg_cpr: float
+    attendance_rate: float
+    fulfillment_pct: float
+    image_allowed: str
+    disclosure_needed: str
+    score: float
+    best_time_1: str
+    best_time_2: str
+    flags: List[str] = []
+
+@app.post("/vor", response_model=List[VenueResult])
+def run_vor(request: VORRequest):
     try:
-        # Load DataFrame from S3
-        df = pd.read_csv(S3_CSV_URL)
+        # Load from S3
+        s3_url = "https://acquireup-venue-data.s3.us-east-2.amazonaws.com/all_events_23_25.csv"
+        response = requests.get(s3_url)
+        response.raise_for_status()
+        df = pd.read_csv(io.StringIO(response.text), encoding='utf-8')
 
-        # Clean and normalize columns
-        df.columns = df.columns.str.strip()
-        df = df[df['Topic'].str.upper() == req.topic.upper()]
-        df = df[df['City'].str.upper() == req.city.upper()]
-        df = df[df['State'].str.upper() == req.state.upper()]
-        df = df[df['Miles from center'] <= req.miles]
+        # Filter relevant data
+        df = df[df['Topic'] == request.topic]
+        df = df[(df['City'].str.lower() == request.city.lower()) & (df['State'].str.lower() == request.state.lower())]
 
         if df.empty:
-            return {"message": "No matching venues found."}
+            return []
 
-        df['Event Date'] = pd.to_datetime(df['Event Date'], errors='coerce')
-        df = df.dropna(subset=['Event Date'])
+        # Compute metrics
+        df['Attended HH'] = pd.to_numeric(df['Attended HH'], errors='coerce')
+        df['Gross Registrants'] = pd.to_numeric(df['Gross Registrants'], errors='coerce')
+        df['FB CPR'] = pd.to_numeric(df['FB CPR'], errors='coerce')
+        df['Cost per Verified HH'] = df['FB CPR'] / (df['Attended HH'] / df['Gross Registrants'])
 
-        today = pd.Timestamp.now()
-        df['Days Ago'] = (today - df['Event Date']).dt.days
-
-        # Calculate derived fields
         df['Attendance Rate'] = df['Attended HH'] / df['Gross Registrants']
         df['Fulfillment %'] = df['Attended HH'] / (df['Registration Max'] / 2.4)
-        df['Score Weight'] = df['Days Ago'].apply(lambda d: 1.25 if d <= 30 else (1.0 if d <= 90 else 0.8))
+        df['Event Date'] = pd.to_datetime(df['Event Date'], errors='coerce')
 
-        # Avoid divide-by-zero errors
-        df['CPA'] = df['Cost per Verified HH'].replace(0, 9999)
-        df['CPR'] = df['FB CPR'].replace(0, 9999)
+        today = datetime.today()
+        df['Recency Weight'] = df['Event Date'].apply(
+            lambda x: 1.25 if (today - x).days <= 30 else (1.0 if (today - x).days <= 90 else 0.8)
+        )
 
-        # Scoring formula
-        df['Score Raw'] = (1 / df['CPA'] * 0.5) + (df['Fulfillment %'] * 0.3) + (df['Attendance Rate'] * 0.2)
-        df['Final Score'] = df['Score Raw'] * df['Score Weight'] * 40  # Scale to 40-point system
+        df['Score'] = ((1 / df['Cost per Verified HH']) * 0.5 + df['Fulfillment %'] * 0.3 + df['Attendance Rate'] * 0.2) * df['Recency Weight'] * 40
 
-        # Aggregate by venue
-        group_cols = ['Venue']
-        agg_df = df.groupby(group_cols).agg({
-            'Final Score': 'mean',
+        venues = df.groupby('Venue').agg({
+            'City': 'first',
+            'State': 'first',
             'Event Date': 'max',
             'Gross Registrants': 'mean',
-            'CPA': 'mean',
-            'CPR': 'mean',
+            'Cost per Verified HH': 'mean',
+            'FB CPR': 'mean',
             'Attendance Rate': 'mean',
             'Fulfillment %': 'mean',
             'Venue Image Allowed': 'first',
-            'Disclosure Required': 'first',
-            'Job Number': 'count'
+            'Venue Disclosure Needed': 'first',
+            'Score': 'mean'
         }).reset_index()
 
-        agg_df = agg_df.sort_values(by='Final Score', ascending=False).head(4)
+        # Sort and prepare response
+        venues = venues.sort_values(by='Score', ascending=False).head(4)
 
-        # Format response
-        results = []
-        for _, row in agg_df.iterrows():
-            results.append({
-                "🏆 Venue": row['Venue'],
-                "📍 Location": f"{req.city}, {req.state}",
-                "📅 Most Recent Event": row['Event Date'].strftime("%Y-%m-%d"),
-                "📆 Number of Events": int(row['Job Number']),
-                "📈 Avg. Gross Registrants": round(row['Gross Registrants'], 1),
-                "💰 Avg. CPA": f"${row['CPA']:.2f}",
-                "💵 Avg. CPR": f"${row['CPR']:.2f}",
-                "📉 Attendance Rate": f"{row['Attendance Rate']:.1%}",
-                "🎯 Fulfillment %": f"{row['Fulfillment %']:.1%}",
-                "📸 Image Allowed": "✅" if row['Venue Image Allowed'] == "Yes" else "❌",
-                "⚠️ Disclosure Needed": "✅" if row['Disclosure Required'] == "Yes" else "❌",
-                "🥇 Score": f"{row['Final Score']:.1f}/40",
-            })
+        result = []
+        for _, row in venues.iterrows():
+            flags = []
+            if row['Venue Image Allowed'] == 'No':
+                flags.append("Image Not Allowed")
+            if row['Venue Disclosure Needed'] == 'Yes':
+                flags.append("Disclosure Required")
 
-        return {"status": "success", "top_venues": results}
+            result.append(VenueResult(
+                venue=row['Venue'],
+                city=row['City'],
+                state=row['State'],
+                most_recent_event=row['Event Date'].strftime("%Y-%m-%d"),
+                number_of_events=int(df[df['Venue'] == row['Venue']].shape[0]),
+                avg_gross_registrants=round(row['Gross Registrants'], 1),
+                avg_cpa=round(row['Cost per Verified HH'], 2),
+                avg_cpr=round(row['FB CPR'], 2),
+                attendance_rate=round(row['Attendance Rate'], 2),
+                fulfillment_pct=round(row['Fulfillment %'], 2),
+                image_allowed="✅" if row['Venue Image Allowed'] == 'Yes' else "❌",
+                disclosure_needed="✅" if row['Venue Disclosure Needed'] == 'Yes' else "❌",
+                score=round(row['Score'], 1),
+                best_time_1="11:00am on Monday",
+                best_time_2="6:00pm on Monday",
+                flags=flags
+            ))
 
+        return result
     except Exception as e:
-        return {"error": str(e)}
+        return [{"error": str(e)}]
+
 
 
 
