@@ -7,7 +7,7 @@ app = FastAPI()
 
 CSV_URL = "https://acquireup-venue-data.s3.us-east-2.amazonaws.com/all_events_23_25.csv"
 
-# Topic alias mapping
+# Abbreviation mapping
 TOPIC_MAP = {
     "TIR": "taxes_in_retirement_567",
     "EP": "estate_planning_567",
@@ -23,54 +23,49 @@ class VorRequest(BaseModel):
 @app.post("/vor")
 def venue_optimization(request: VorRequest):
     try:
-        df = pd.read_csv(CSV_URL, encoding="utf-8")
+        df = pd.read_csv(CSV_URL, encoding='utf-8')
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load CSV: {e}")
 
     df.columns = df.columns.str.lower().str.replace(" ", "_").str.replace(r"[^\w\s]", "", regex=True)
 
     if df.empty:
-        raise HTTPException(status_code=404, detail="CSV loaded but contains no data.")
+        raise HTTPException(status_code=404, detail="No data found in CSV.")
 
-    # Normalize inputs
-    city = request.city.strip().lower()
-    state = request.state.strip().lower()
-    topic_key = request.topic.upper()
-    mapped_topic = TOPIC_MAP.get(topic_key)
+    # Topic normalization
+    topic_full = TOPIC_MAP.get(request.topic.upper(), None)
+    if not topic_full:
+        raise HTTPException(status_code=400, detail="Invalid topic code. Use TIR, EP, or SS.")
 
-    if not mapped_topic:
-        raise HTTPException(status_code=400, detail=f"Invalid topic: {request.topic}")
+    # Filter data
+    df["event_date"] = pd.to_datetime(df["event_date"], errors="coerce")
+    df["event_age_days"] = (datetime.now() - df["event_date"]).dt.days
 
-    # Filter by request
     df = df[
-        (df["city"].str.lower() == city) &
-        (df["state"].str.lower() == state) &
-        (df["topic"].str.lower() == mapped_topic)
+        (df["topic"].str.lower() == topic_full) &
+        (df["city"].str.lower() == request.city.lower()) &
+        (df["state"].str.lower() == request.state.lower())
     ]
 
     if df.empty:
         return {"message": "No matching rows for topic and city/state."}
 
-    # Preprocessing
-    df["event_date"] = pd.to_datetime(df["event_date"], errors="coerce")
-    df["event_age_days"] = (datetime.now() - df["event_date"]).dt.days
-    df["attendance_rate"] = df["attended_hh"] / df["gross_registrants"].replace({0: None})
-    df["fulfillment_pct"] = df["attended_hh"] / (df["registration_max"] / 2.4).replace({0: None})
+    # Calculated Fields
+    df["attendance_rate"] = df["attended_hh"] / df["gross_registrants"]
+    df["fulfillment_pct"] = df["attended_hh"] / (df["registration_max"] / 2.4)
     df["score"] = (
-        (1 / df["cost_per_verified_hh"].replace({0: None})) * 0.5 +
+        (1 / df["cost_per_verified_hh"]) * 0.5 +
         df["fulfillment_pct"] * 0.3 +
         df["attendance_rate"] * 0.2
     )
 
     def weighted_score(row):
-        weight = 1.0
         if row["event_age_days"] <= 30:
-            weight = 1.25
+            return row["score"] * 1.25 * 40
         elif 31 <= row["event_age_days"] <= 90:
-            weight = 1.0
+            return row["score"] * 1.0 * 40
         else:
-            weight = 0.8
-        return row["score"] * weight * 40
+            return row["score"] * 0.8 * 40
 
     df["weighted_score"] = df.apply(weighted_score, axis=1)
 
@@ -111,10 +106,10 @@ def venue_optimization(request: VorRequest):
             "📈 Avg Registrants": round(row["avg_registrants"], 1),
             "💰 Avg CPA": round(row["avg_cpa"], 2),
             "💵 Avg CPR": round(row["avg_cpr"], 2),
-            "📉 Attendance Rate": f"{round(row['attendance_rate'] * 100, 1)}%" if pd.notnull(row["attendance_rate"]) else "N/A",
-            "🎯 Fulfillment %": f"{round(row['fulfillment_pct'] * 100, 1)}%" if pd.notnull(row["fulfillment_pct"]) else "N/A",
-            "📸 Image Allowed": "✅" if row["venue_image_allowed"] else "❌",
-            "⚠️ Disclosure Needed": "✅" if row["venue_disclosure_needed"] else "❌",
+            "📉 Attendance Rate": f"{round(row['attendance_rate'] * 100, 1)}%",
+            "🎯 Fulfillment %": f"{round(row['fulfillment_pct'] * 100, 1)}%",
+            "📸 Image Allowed": "✅" if row["venue_image_allowed"] == True else "❌",
+            "⚠️ Disclosure Needed": "✅" if row["venue_disclosure_needed"] == True else "❌",
             "🥇 Score": f"{round(row['score'], 1)} / 40"
         })
 
