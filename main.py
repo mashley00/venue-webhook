@@ -1,107 +1,55 @@
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import pandas as pd
-from datetime import datetime
+import datetime
+import traceback
 
 app = FastAPI()
 
-CSV_URL = "https://acquireup-venue-data.s3.us-east-2.amazonaws.com/all_events_23_25.csv"
-
+# Pydantic model to parse input
 class VorRequest(BaseModel):
     topic: str
     city: str
     state: str
-    miles: float = 6.0
+    miles: int = 6  # default value
 
 @app.post("/vor")
 def venue_optimization(request: VorRequest):
     try:
-        df = pd.read_csv(CSV_URL, encoding="utf-8")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"❌ CSV load failed: {str(e)}")
+        # --- Step 1: Load data ---
+        url = "https://raw.githubusercontent.com/mashley00/VenueGPT/refs/heads/main/All%20Events%2023%20to%2025%20TIR%20EP%20SS%20CSV%20UTF%208.csv"
+        df = pd.read_csv(url, encoding="utf-8")
 
-    try:
-        df.columns = df.columns.str.lower().str.replace(" ", "_").str.replace(r"[^\w\s]", "", regex=True)
-        df["event_date"] = pd.to_datetime(df["event_date"], errors="coerce")
-        df["event_age_days"] = (datetime.now() - df["event_date"]).dt.days
+        # --- Step 2: Filter based on input ---
+        topic = request.topic.strip().upper()
+        city = request.city.strip().title()
+        state = request.state.strip().upper()
 
-        # Filter to topic/city/state
-        df = df[
-            (df["topic"].str.lower() == request.topic.lower()) &
-            (df["city"].str.lower() == request.city.lower()) &
-            (df["state"].str.lower() == request.state.lower())
-        ]
+        df = df[df["Topic"].str.upper() == topic]
+        df = df[df["City"].str.title() == city]
+        df = df[df["State"].str.upper() == state]
 
         if df.empty:
-            return {"message": "No matching rows for topic and city/state."}
+            raise HTTPException(status_code=404, detail="No events found for that topic and location.")
 
-        # Calculated Fields
-        df["attendance_rate"] = df["attended_hh"] / df["gross_registrants"]
-        df["fulfillment_pct"] = df["attended_hh"] / (df["registration_max"] / 2.4)
-        df["score"] = (
-            (1 / df["cost_per_verified_hh"]) * 0.5 +
-            df["fulfillment_pct"] * 0.3 +
-            df["attendance_rate"] * 0.2
-        )
+        # --- Step 3: Process results ---
+        # Example: just count matching events and return basic info
+        result = {
+            "matching_events": len(df),
+            "avg_registrants": round(df["Gross Registrants"].mean(), 2),
+            "avg_attended": round(df["Attended HH"].mean(), 2),
+            "avg_cpr": round(df["FB CPR"].mean(), 2),
+            "avg_cpa": round(df["Cost per Verified HH"].mean(), 2)
+        }
 
-        def weighted_score(row):
-            if row["event_age_days"] <= 30:
-                return row["score"] * 1.25 * 40
-            elif 31 <= row["event_age_days"] <= 90:
-                return row["score"] * 1.0 * 40
-            else:
-                return row["score"] * 0.8 * 40
+        return result
 
-        df["weighted_score"] = df.apply(weighted_score, axis=1)
-
-        # Aggregate
-        agg = df.groupby("venue").agg({
-            "job_number": "count",
-            "event_date": "max",
-            "gross_registrants": "mean",
-            "cost_per_verified_hh": "mean",
-            "fb_cpr": "mean",
-            "attendance_rate": "mean",
-            "fulfillment_pct": "mean",
-            "venue_image_allowed": "last",
-            "venue_disclosure_needed": "last",
-            "weighted_score": "mean"
-        }).reset_index()
-
-        agg = agg.rename(columns={
-            "job_number": "event_count",
-            "event_date": "most_recent",
-            "gross_registrants": "avg_registrants",
-            "cost_per_verified_hh": "avg_cpa",
-            "fb_cpr": "avg_cpr",
-            "attendance_rate": "attendance_rate",
-            "fulfillment_pct": "fulfillment_pct",
-            "weighted_score": "score"
-        })
-
-        agg = agg.sort_values(by="score", ascending=False).head(4)
-
-        venues = []
-        for _, row in agg.iterrows():
-            venues.append({
-                "🏆 Venue": row["venue"],
-                "📍 City, State": f"{request.city}, {request.state}",
-                "📅 Most Recent": row["most_recent"].strftime("%Y-%m-%d") if pd.notnull(row["most_recent"]) else "N/A",
-                "🗓️ # Events": int(row["event_count"]),
-                "📈 Avg Registrants": round(row["avg_registrants"], 1),
-                "💰 Avg CPA": round(row["avg_cpa"], 2),
-                "💵 Avg CPR": round(row["avg_cpr"], 2),
-                "📉 Attendance Rate": f"{round(row['attendance_rate'] * 100, 1)}%",
-                "🎯 Fulfillment %": f"{round(row['fulfillment_pct'] * 100, 1)}%",
-                "📸 Image Allowed": "✅" if row["venue_image_allowed"] == True else "❌",
-                "⚠️ Disclosure Needed": "✅" if row["venue_disclosure_needed"] == True else "❌",
-                "🥇 Score": f"{round(row['score'], 1)} / 40"
-            })
-
-        return {"top_venues": venues}
-    
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"❌ Processing failed: {str(e)}")
+        # Logs the full traceback to the server logs and returns the error to client
+        print("ERROR during /vor request:")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
+
 
 
 
