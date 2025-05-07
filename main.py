@@ -1,31 +1,32 @@
+import pandas as pd
+import numpy as np
+import requests
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import List, Optional
-from fastapi.middleware.cors import CORSMiddleware
-import pandas as pd
-from datetime import datetime
-import requests
+from typing import List
 import os
-import traceback
+
+from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = FastAPI()
 
-# Enable CORS if needed
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Pydantic request model
 class VORRequest(BaseModel):
     topic: str
     city: str
     state: str
-    miles: Optional[float] = 6.0
+    miles: int = 6
 
-# Pydantic response model
 class VORResponse(BaseModel):
     venue: str
     city: str
@@ -44,82 +45,80 @@ class VORResponse(BaseModel):
     best_time_2: str
 
 @app.post("/vor", response_model=List[VORResponse])
-def get_vor(request: VORRequest):
+async def get_vor(request: VORRequest):
     try:
-        # Load CSV from S3
-        s3_url = "https://acquireup-venue-data.s3.us-east-2.amazonaws.com/all_events_23_25.csv"
-        df = pd.read_csv(s3_url)
+        df_url = "https://acquireup-venue-data.s3.us-east-2.amazonaws.com/all_events_23_25.csv"
+        df = pd.read_csv(df_url, encoding="utf-8")
 
-        # Clean column names
-        df.columns = df.columns.str.strip().str.replace(" ", "_").str.lower()
-
-        # Parse dates
+        df.columns = df.columns.str.strip().str.lower().str.replace(" ", "_")
         df['event_date'] = pd.to_datetime(df['event_date'], errors='coerce')
 
-        # Map topic
-        topic_map = {
-            "TIR": "taxes_in_retirement_567",
-            "EP": "estate_planning_567",
-            "SS": "social_security_567"
-        }
+        topic_map = {"TIR": "taxes_in_retirement_567", "EP": "estate_planning_567", "SS": "social_security_567"}
         topic_mapped = topic_map.get(request.topic.upper())
         if not topic_mapped:
-            raise HTTPException(status_code=400, detail="Invalid topic code")
+            raise HTTPException(status_code=400, detail="Invalid topic code.")
 
-        # Filter
-        filtered = df[
-            (df['topic'] == topic_mapped) &
-            (df['city'].str.lower() == request.city.lower()) &
-            (df['state'].str.lower() == request.state.lower())
-        ]
+        df = df[df['topic'].str.lower() == topic_mapped.lower()]
+        df = df[df['city'].str.lower() == request.city.lower()]
+        df = df[df['state'].str.lower() == request.state.lower()]
 
-        if filtered.empty:
-            return []
-
-        # Compute fields
+        # Compute derived metrics
+        filtered = df.copy()
         filtered['attendance_rate'] = filtered['attended_hh'] / filtered['gross_registrants']
         filtered['fulfillment_pct'] = filtered['attended_hh'] / (filtered['registration_max'] / 2.4)
         filtered['cost_per_verified_hh'] = filtered['fb_cpr'] / filtered['attendance_rate']
+        filtered = filtered.replace([np.inf, -np.inf], np.nan).dropna(subset=['attendance_rate', 'cost_per_verified_hh'])
 
-        # Grouped stats
-        grouped = filtered.groupby('venue').agg(
-            city=('city', 'first'),
-            state=('state', 'first'),
-            most_recent_event=('event_date', 'max'),
-            number_of_events=('event_date', 'count'),
-            avg_gross_registrants=('gross_registrants', 'mean'),
-            avg_cpa=('cost_per_verified_hh', 'mean'),
-            avg_cpr=('fb_cpr', 'mean'),
-            attendance_rate=('attendance_rate', 'mean'),
-            fulfillment_pct=('fulfillment_pct', 'mean'),
-            image_allowed=('venue_image_allowed', lambda x: x.mode()[0] if not x.empty else False),
-            disclosure_needed=('venue_disclosure', lambda x: x.mode()[0] if not x.empty else False)
-        ).reset_index()
+        # Group and average
+        grouped = filtered.groupby('venue').agg({
+            'city': 'first',
+            'state': 'first',
+            'event_date': 'max',
+            'gross_registrants': 'mean',
+            'cost_per_verified_hh': 'mean',
+            'fb_cpr': 'mean',
+            'attendance_rate': 'mean',
+            'fulfillment_pct': 'mean',
+            'image_allowed': 'first',
+            'disclosure_needed': 'first',
+            'job_number': 'count'
+        }).reset_index()
 
-        # Score
+        # Compute score on 100-point scale
         grouped['score'] = (
-            (1 / grouped['avg_cpa']) * 0.5 +
+            (1 / grouped['cost_per_verified_hh']) * 0.5 +
             grouped['fulfillment_pct'] * 0.3 +
             grouped['attendance_rate'] * 0.2
-        ) * 100 / 1.0  # Convert to 100-pt scale
+        ) * 100
 
-        # Sort
-        grouped = grouped.sort_values(by='score', ascending=False).head(4)
+        # Sort and select top 4
+        top_venues = grouped.sort_values(by='score', ascending=False).head(4)
 
-        # Add time slot recs (placeholder for now)
-        grouped['best_time_1'] = "11:00am on Monday"
-        grouped['best_time_2'] = "6:00pm on Monday"
-
-        # Format date
-        grouped['most_recent_event'] = grouped['most_recent_event'].dt.strftime("%Y-%m-%d")
-
-        # Build response
-        response = grouped.to_dict(orient='records')
+        # Build response list
+        response = []
+        for _, row in top_venues.iterrows():
+            response.append(VORResponse(
+                venue=row['venue'],
+                city=row['city'],
+                state=row['state'],
+                most_recent_event=row['event_date'].strftime('%Y-%m-%d') if pd.notnull(row['event_date']) else "N/A",
+                number_of_events=int(row['job_number']),
+                avg_gross_registrants=round(row['gross_registrants'], 2),
+                avg_cpa=round(row['cost_per_verified_hh'], 2),
+                avg_cpr=round(row['fb_cpr'], 2),
+                attendance_rate=round(row['attendance_rate'], 2),
+                fulfillment_pct=round(row['fulfillment_pct'], 2),
+                image_allowed=bool(row['image_allowed']),
+                disclosure_needed=bool(row['disclosure_needed']),
+                score=round(row['score'], 2),
+                best_time_1="11:00 AM on Monday",
+                best_time_2="6:00 PM on Monday"
+            ))
         return response
 
     except Exception as e:
-        error_message = f"{str(e)}\n\n{traceback.format_exc()}"
-        raise HTTPException(status_code=500, detail=error_message)
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 
