@@ -1,20 +1,21 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Request
 from pydantic import BaseModel
+from typing import List
 import pandas as pd
-import requests
+import traceback
 import os
+import requests
 
 app = FastAPI()
 
-# Define the request model
+# === Models ===
 class VORRequest(BaseModel):
     topic: str
     city: str
     state: str
     miles: int = 6
 
-# Define the response model (optional strict validation for later)
-class VenueRecommendation(BaseModel):
+class VenueResult(BaseModel):
     venue: str
     city: str
     state: str
@@ -31,53 +32,76 @@ class VenueRecommendation(BaseModel):
     best_time_1: str
     best_time_2: str
 
-# Load the dataset from S3
-S3_URL = "https://acquireup-venue-data.s3.us-east-2.amazonaws.com/all_events_23_25.csv"
+# === Load Data ===
+CSV_URL = "https://acquireup-venue-data.s3.us-east-2.amazonaws.com/all_events_23_25.csv"
 
-def load_data():
+def load_csv_data():
+    print("Loading CSV data...")
     try:
-        df = pd.read_csv(S3_URL)
+        df = pd.read_csv(CSV_URL)
+        print(f"CSV Loaded. Rows: {len(df)}. Columns: {df.columns.tolist()}")
         return df
     except Exception as e:
-        raise RuntimeError(f"Failed to load data: {e}")
+        print("Error loading CSV:", e)
+        raise
 
-# Main POST route
-@app.post("/vor")
-async def get_vor(payload: VORRequest):
+# === Route ===
+@app.post("/vor", response_model=List[VenueResult])
+async def get_venue_optimization_report(request: VORRequest):
     try:
-        df = load_data()
+        df = load_csv_data()
 
-        # Map short topic codes to full dataset topic names
+        # Step 1: Normalize & Filter by topic
+        print(f"Filtering by topic: {request.topic}, city: {request.city}, state: {request.state}")
         topic_map = {
-            "TIR": "taxes_in_retirement_567",
-            "EP": "estate_planning_567",
-            "SS": "social_security_567"
+            "TIR": "Taxes in Retirement 567",
+            "EP": "Estate Planning 567",
+            "SS": "Social Security 567"
         }
+        topic_name = topic_map.get(request.topic.upper())
+        if not topic_name:
+            raise ValueError(f"Invalid topic code: {request.topic}")
 
-        topic_code = payload.topic.upper().strip()
-        topic_key = topic_map.get(topic_code)
+        df = df[df["Topic"] == topic_name]
+        print(f"Filtered rows for topic: {len(df)}")
 
-        if not topic_key:
-            raise HTTPException(status_code=400, detail=f"Invalid topic code '{topic_code}'. Must be one of: {list(topic_map.keys())}")
-
-        # Filter based on topic, city, and state
-        df_filtered = df[
-            (df["Topic"] == topic_key) &
-            (df["City"].str.lower() == payload.city.lower()) &
-            (df["State"].str.upper() == payload.state.upper())
+        df = df[
+            (df["City"].str.lower() == request.city.lower()) &
+            (df["State"].str.lower() == request.state.lower())
         ]
+        print(f"Filtered rows for location: {len(df)}")
 
-        if df_filtered.empty:
-            return [{"error": f"No events found for {payload.city}, {payload.state} with topic {payload.topic}"}]
+        # Placeholder scoring logic for now
+        df["score"] = 10.0  # Temporary dummy
 
-        # Placeholder scoring logic (to be replaced with real model)
-        df_filtered["score"] = 1  # Dummy value for now
+        result = []
+        for _, row in df.iterrows():
+            result.append(VenueResult(
+                venue=row["Venue"],
+                city=row["City"],
+                state=row["State"],
+                most_recent_event=str(row["Event Date"]),
+                number_of_events=1,  # Replace later with grouped logic
+                avg_gross_registrants=row.get("Gross Registrants", 0),
+                avg_cpa=row.get("Cost per Verified HH", 0),
+                avg_cpr=row.get("FB CPR", 0),
+                attendance_rate=row.get("Attendance Rate", 0),
+                fulfillment_pct=0.8,  # Placeholder
+                image_allowed=row.get("Image Allowed", False) == True,
+                disclosure_needed=row.get("Venue Disclosure Needed", False) == True,
+                score=row["score"],
+                best_time_1="6:00 PM on Monday",
+                best_time_2="11:00 AM on Wednesday"
+            ))
 
-        # Simplified return for initial test
-        return df_filtered[["Venue", "City", "State", "Topic"]].head(4).to_dict(orient="records")
+        print(f"Returning {len(result)} venues")
+        return result
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        traceback_str = traceback.format_exc()
+        print("Error in /vor endpoint:\n", traceback_str)
+        return [{"error": str(e)}]  # Returns a list so response_model stays satisfied
+
 
 
 
