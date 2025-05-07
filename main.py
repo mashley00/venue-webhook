@@ -1,55 +1,50 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Request
 from pydantic import BaseModel
 import pandas as pd
-import datetime
-import traceback
+from typing import Optional
 
 app = FastAPI()
 
-# Pydantic model to parse input
-class VorRequest(BaseModel):
+# Define your S3 public CSV URL
+CSV_URL = "https://acquireup-venue-data.s3.us-east-2.amazonaws.com/all_events_23_25.csv"
+
+# Define the request model
+class VORRequest(BaseModel):
     topic: str
     city: str
     state: str
-    miles: int = 6  # default value
+    miles: Optional[int] = 6
 
 @app.post("/vor")
-def venue_optimization(request: VorRequest):
+async def venue_optimization(request: VORRequest):
     try:
-        # --- Step 1: Load data ---
-        url = "https://raw.githubusercontent.com/mashley00/VenueGPT/refs/heads/main/All%20Events%2023%20to%2025%20TIR%20EP%20SS%20CSV%20UTF%208.csv"
-        df = pd.read_csv(url, encoding="utf-8")
+        # Load data from S3
+        df = pd.read_csv(CSV_URL)
 
-        # --- Step 2: Filter based on input ---
-        topic = request.topic.strip().upper()
-        city = request.city.strip().title()
-        state = request.state.strip().upper()
+        # Placeholder logic to confirm the app is working
+        filtered = df[
+            (df['Topic'].str.upper() == request.topic.upper()) &
+            (df['City'].str.upper() == request.city.upper()) &
+            (df['State'].str.upper() == request.state.upper())
+        ]
 
-        df = df[df["Topic"].str.upper() == topic]
-        df = df[df["City"].str.title() == city]
-        df = df[df["State"].str.upper() == state]
+        count = len(filtered)
 
-        if df.empty:
-            raise HTTPException(status_code=404, detail="No events found for that topic and location.")
-
-        # --- Step 3: Process results ---
-        # Example: just count matching events and return basic info
-        result = {
-            "matching_events": len(df),
-            "avg_registrants": round(df["Gross Registrants"].mean(), 2),
-            "avg_attended": round(df["Attended HH"].mean(), 2),
-            "avg_cpr": round(df["FB CPR"].mean(), 2),
-            "avg_cpa": round(df["Cost per Verified HH"].mean(), 2)
+        return {
+            "message": "Data processed successfully",
+            "rows_matching": count,
+            "sample_venues": filtered['Venue'].dropna().unique().tolist()[:5]
         }
 
-        return result
-
     except Exception as e:
-        # Logs the full traceback to the server logs and returns the error to client
-        print("ERROR during /vor request:")
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
+        # Log the error server-side (optional enhancement: log to a monitoring tool)
+        print("❌ Error occurred:", str(e))
 
+        # Return diagnostic info
+        return {
+            "error": "Internal server error",
+            "details": str(e)
+        }
 
 
 
