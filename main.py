@@ -1,16 +1,28 @@
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
 import datetime
+import math
+import logging
 
-# ---- Constants ----
+# -------------------------
+# Logging Setup
+# -------------------------
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("VenueGPT")
+
+# -------------------------
+# Constants
+# -------------------------
 S3_URL = "https://acquireup-venue-data.s3.us-east-2.amazonaws.com/all_events_23_25.csv"
-VERSION = "VenueGPT v1.0.1 - 2025-05-08"
+VERSION = "VenueGPT v1.0.0 - 2025-05-08"
 
-# ---- FastAPI App ----
-app = FastAPI(title="Venue Optimization Report", version=VERSION)
+# -------------------------
+# FastAPI App
+# -------------------------
+app = FastAPI(title="Venue Optimization API", version=VERSION)
 
 app.add_middleware(
     CORSMiddleware,
@@ -20,13 +32,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---- Models ----
-class VORRequest(BaseModel):
-    topic: str
-    city: str
-    state: str
-    miles: Optional[float] = 6.0
-
+# -------------------------
+# Response Model
+# -------------------------
 class VenueRecommendation(BaseModel):
     venue: str
     city: str
@@ -44,7 +52,9 @@ class VenueRecommendation(BaseModel):
     best_time_1: str
     best_time_2: str
 
-# ---- Utility Functions ----
+# -------------------------
+# Utility Functions
+# -------------------------
 def weight_by_recency(date, reference):
     days_old = (reference - date).days
     if days_old <= 30:
@@ -57,41 +67,65 @@ def weight_by_recency(date, reference):
 def best_times(times: List[str]) -> List[str]:
     preferred = ["11:00 AM", "11:30 AM", "6:00 PM", "6:30 PM"]
     filtered = [t for t in times if t in preferred]
-    if len(filtered) >= 2:
-        return filtered[:2]
-    return (filtered + times[:2])[:2]
+    return (filtered + times[:2])[:2] if len(filtered) < 2 else filtered[:2]
 
-# ---- Load Data ----
+# -------------------------
+# Data Loading
+# -------------------------
 try:
+    logger.info(f"Loading data from: {S3_URL}")
     df = pd.read_csv(S3_URL)
     df.columns = [c.lower().strip().replace(" ", "_") for c in df.columns]
     df['event_date'] = pd.to_datetime(df['event_date'], errors='coerce')
+    logger.info(f"Data shape after load: {df.shape}")
 except Exception as e:
-    raise RuntimeError(f"Error loading or processing data from S3: {e}")
+    logger.exception("Error loading dataset from S3")
+    raise RuntimeError(f"Failed to load data: {e}")
 
-# ---- Endpoint ----
+# -------------------------
+# POST Endpoint
+# -------------------------
 @app.post("/vor", response_model=List[VenueRecommendation])
-def get_vor(request: VORRequest):
+def get_vor(
+    topic: str = Query(..., description="Seminar topic (TIR, EP, or SS)"),
+    city: str = Query(...),
+    state: str = Query(...),
+    miles: Optional[float] = Query(6.0)
+):
+    logger.info(f"Received VOR request for {topic=} {city=}, {state=}, {miles=}")
+    reference_date = datetime.datetime.now()
+
+    topic_map = {
+        "TIR": "taxes_in_retirement_567",
+        "EP": "estate_planning_567",
+        "SS": "social_security_567"
+    }
+
+    if topic not in topic_map:
+        logger.warning("Invalid topic provided")
+        raise HTTPException(status_code=400, detail="Invalid topic. Must be one of: TIR, EP, SS")
+
+    topic_value = topic_map[topic]
+
     try:
-        topic = request.topic
-        city = request.city
-        state = request.state
-        miles = request.miles
-
-        reference_date = datetime.datetime.now()
-        topic_map = {"TIR": "taxes_in_retirement_567", "EP": "estate_planning_567", "SS": "social_security_567"}
-        if topic not in topic_map:
-            raise HTTPException(status_code=400, detail="Invalid topic. Must be one of: TIR, EP, SS")
-
         df_filtered = df[
-            (df['topic'].str.lower() == topic_map[topic].lower()) &
+            (df['topic'].str.lower() == topic_value.lower()) &
             (df['city'].str.lower() == city.lower()) &
             (df['state'].str.lower() == state.lower()) &
             (df['event_date'].notnull())
         ].copy()
 
+        logger.info(f"Filtered data shape: {df_filtered.shape}")
+
         if df_filtered.empty:
+            logger.warning("No data found for given filter criteria")
             raise HTTPException(status_code=404, detail="No matching venue data found.")
+
+        required_cols = ['attended_hh', 'gross_registrants', 'registration_max', 'fb_cpr', 'event_time', 'image_allowed', 'venue_disclosure']
+        missing_cols = [col for col in required_cols if col not in df_filtered.columns]
+        if missing_cols:
+            logger.error(f"Missing required columns: {missing_cols}")
+            raise HTTPException(status_code=500, detail=f"Missing columns: {missing_cols}")
 
         df_filtered['attendance_rate'] = df_filtered['attended_hh'] / df_filtered['gross_registrants']
         df_filtered['fulfillment_pct'] = df_filtered['attended_hh'] / (df_filtered['registration_max'] / 2.4)
@@ -146,10 +180,13 @@ def get_vor(request: VORRequest):
                 best_time_2=top_times[1] if len(top_times) > 1 else "N/A"
             ))
 
+        logger.info(f"Returning {len(results)} recommendations")
         return results
 
     except Exception as e:
+        logger.exception("Error during report generation")
         raise HTTPException(status_code=500, detail=f"Error generating report: {str(e)}")
+
 
 
 
