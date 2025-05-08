@@ -129,8 +129,6 @@ async def run_vor(request: VORRequest):
             else:
                 est_leads = reg_per_1k_reach = reg_per_1k_impr = "N/A"
 
-            preferred_times = ", ".join(sorted(set(group_sorted['event_time'].dropna()))) or "Not enough data"
-
             emoji_block = {
                 "🥇 Venue": venue_name,
                 "📍 City, State": f"{request.city}, {request.state}",
@@ -142,9 +140,9 @@ async def run_vor(request: VORRequest):
                 "📉 Attendance Rate": f"{round(group['attendance_rate'].mean() * 100, 1)}%",
                 "🎯 Fulfillment %": f"{round(group['fulfillment_pct'].mean() * 100, 1)}%",
                 "📸 Image Allowed": "✅" if image_ok == "TRUE" else "❌",
-                "⚠️ Disclosure Needed": "✅" if disclosure == "TRUE" else "❌",
+                "⚠️ Disclosure Needed": "🟥" if disclosure == "TRUE" else "✅",
                 "🚨 Recency Flag": "⚠️ Used <60d" if used_recently else "✅ OK",
-                "⏰ Best Times": preferred_times,
+                "⏰ Best Times": ", ".join(sorted(set(group_sorted['event_time'].dropna()))) or "Not enough data",
                 "🏅 Score": f"{round(group['score'].mean(), 2)} / 40",
                 "🔮 Est. 14-Day Leads": est_leads,
                 "📊 Reg/1k Reach": reg_per_1k_reach,
@@ -153,8 +151,34 @@ async def run_vor(request: VORRequest):
 
             venues.append(emoji_block)
 
-        venues = sorted(venues, key=lambda v: float(v["🏅 Score"].split()[0]), reverse=True)[:4]
-        return venues
+        venues_sorted = sorted(venues, key=lambda v: float(v["🏅 Score"].split()[0]), reverse=True)
+        top_4 = venues_sorted[:4]
+
+        # 📌 Most Recently Used Venue
+        recent_city_event = scored.sort_values("event_date", ascending=False).iloc[0]
+        recent_venue_name = recent_city_event['venue']
+
+        if recent_venue_name not in [v["🥇 Venue"] for v in top_4]:
+            recent_group = scored[scored['venue'] == recent_venue_name]
+            disclosure = recent_city_event.get("venue_disclosure", "FALSE")
+            image_ok = recent_city_event.get("image_allowed", "FALSE")
+
+            emoji_recent = {
+                "📌 Most Recently Used Venue": recent_venue_name,
+                "📅 Event Date": recent_city_event['event_date'].strftime("%Y-%m-%d"),
+                "📈 Gross Registrants": int(recent_city_event['gross_registrants']),
+                "💵 CPR": f"${round(recent_city_event['fb_cpr'], 2)}",
+                "💰 CPA": f"${round(recent_city_event['fb_cpr'] / (recent_city_event['attended_hh'] / recent_city_event['gross_registrants']), 2)}",
+                "📉 Attendance Rate": f"{round(recent_city_event['attended_hh'] / recent_city_event['gross_registrants'] * 100, 1)}%",
+                "🎯 Fulfillment %": f"{round(recent_city_event['attended_hh'] / (recent_city_event['registration_max'] / 2.4) * 100, 1)}%",
+                "📸 Image Allowed": "✅" if image_ok == "TRUE" else "❌",
+                "⚠️ Disclosure Needed": "🟥" if disclosure == "TRUE" else "✅",
+                "🚨 Used <60d": "⚠️ Yes" if (today - recent_city_event['event_date']).days < 60 else "✅ No",
+                "🏅 Score": f"{round(recent_city_event['score'], 2)} / 40"
+            }
+            top_4.append(emoji_recent)
+
+        return top_4
 
     except Exception as e:
         logger.exception("Failed to process VOR.")
