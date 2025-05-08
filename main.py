@@ -68,7 +68,8 @@ def calculate_scores(df):
     df.dropna(subset=['attended_hh', 'gross_registrants', 'registration_max', 'fb_cpr'], inplace=True)
     df['attendance_rate'] = df['attended_hh'] / df['gross_registrants']
     df['fulfillment_pct'] = df['attended_hh'] / (df['registration_max'] / 2.4)
-    df['score'] = (1 / df['fb_cpr'] * 0.5) + (df['fulfillment_pct'] * 0.3) + (df['attendance_rate'] * 0.2)
+    df['cpa'] = df['fb_cpr'] / df['attendance_rate']
+    df['score'] = (1 / df['cpa'] * 0.5) + (df['fulfillment_pct'] * 0.3) + (df['attendance_rate'] * 0.2)
     df['score'] = df['score'] * 40
     return df
 
@@ -104,10 +105,8 @@ async def run_vor(request: VORRequest):
             raise HTTPException(status_code=404, detail="No matching events found.")
 
         scored = calculate_scores(filtered)
-
-        # Aggregate per venue
-        venues = []
         today = pd.Timestamp.today()
+        venues = []
 
         for venue_name, group in scored.groupby("venue"):
             group_sorted = group.sort_values("event_date", ascending=False)
@@ -117,8 +116,21 @@ async def run_vor(request: VORRequest):
             disclosure = recent_event.get("venue_disclosure", "FALSE")
             image_ok = recent_event.get("image_allowed", "FALSE")
 
-            times = group_sorted['event_time'].dropna().tolist()
-            preferred_times = ", ".join(sorted(set(times))) if times else "Not enough data"
+            # Predictive Metrics
+            pred_group = group.dropna(subset=['fb_registrants', 'fb_days', 'fb_reach', 'fb_impressions'])
+            if not pred_group.empty:
+                total_fb_reg = pred_group['fb_registrants'].sum()
+                total_fb_days = pred_group['fb_days'].sum()
+                total_reach = pred_group['fb_reach'].sum()
+                total_impr = pred_group['fb_impressions'].sum()
+
+                est_leads = round((total_fb_reg / total_fb_days) * 14) if total_fb_days else "N/A"
+                reg_per_1k_reach = round(total_fb_reg / total_reach * 1000, 2) if total_reach else "N/A"
+                reg_per_1k_impr = round(total_fb_reg / total_impr * 1000, 2) if total_impr else "N/A"
+            else:
+                est_leads = reg_per_1k_reach = reg_per_1k_impr = "N/A"
+
+            preferred_times = ", ".join(sorted(set(group_sorted['event_time'].dropna()))) or "Not enough data"
 
             emoji_block = {
                 "🥇 Venue": venue_name,
@@ -127,13 +139,17 @@ async def run_vor(request: VORRequest):
                 "🗓️ Number of Events": len(group),
                 "📈 Avg. Gross Registrants": round(group['gross_registrants'].mean(), 1),
                 "💵 Avg. CPR": f"${round(group['fb_cpr'].mean(), 2)}",
+                "💰 Avg. CPA": f"${round(group['cpa'].mean(), 2)}",
                 "📉 Attendance Rate": f"{round(group['attendance_rate'].mean() * 100, 1)}%",
                 "🎯 Fulfillment %": f"{round(group['fulfillment_pct'].mean() * 100, 1)}%",
                 "📸 Image Allowed": "✅" if image_ok == "TRUE" else "❌",
                 "⚠️ Disclosure Needed": "✅" if disclosure == "TRUE" else "❌",
                 "🚨 Recency Flag": "⚠️ Used <60d" if used_recently else "✅ OK",
                 "⏰ Best Times": preferred_times,
-                "🏅 Score": f"{round(group['score'].mean(), 2)} / 40"
+                "🏅 Score": f"{round(group['score'].mean(), 2)} / 40",
+                "🔮 Est. 14-Day Leads": est_leads,
+                "📊 Reg/1k Reach": reg_per_1k_reach,
+                "📊 Reg/1k Impressions": reg_per_1k_impr
             }
 
             venues.append(emoji_block)
@@ -144,6 +160,7 @@ async def run_vor(request: VORRequest):
     except Exception as e:
         logger.exception("Failed to process VOR.")
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+
 
 
 
