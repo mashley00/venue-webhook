@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from typing import Union, Optional
 import pandas as pd
 import logging
@@ -37,52 +37,25 @@ TOPIC_MAP = {
     "SS": "social_security_567"
 }
 
-TOPIC_MAP_REVERSE = {
-    "taxes in retirement": "TIR",
-    "taxes_in_retirement_567": "TIR",
-    "estate planning": "EP",
-    "estate_planning_567": "EP",
-    "social security": "SS",
-    "social_security_567": "SS"
-}
-
 class VORRequest(BaseModel):
     topic: str
     city: str
     state: Optional[str] = None
     miles: Optional[Union[int, float]] = 6.0
 
-@app.get("/health")
-async def health_check():
-    return {"status": "ok"}
-
-def calculate_scores(df):
-    df = df.copy()
-    df.dropna(subset=['attended_hh', 'gross_registrants', 'registration_max', 'fb_cpr'], inplace=True)
-    df['attendance_rate'] = df['attended_hh'] / df['gross_registrants']
-    df['fulfillment_pct'] = df['attended_hh'] / (df['registration_max'] / 2.4)
-    df['cpa'] = df['fb_cpr'] / df['attendance_rate']
-    df['score'] = (1 / df['cpa'] * 0.5) + (df['fulfillment_pct'] * 0.3) + (df['attendance_rate'] * 0.2)
-    df['score'] = df['score'] * 40
-    return df
-
 @app.post("/vor")
 async def run_vor(request: VORRequest):
     logger.info(f"Received VOR request: {request.dict()}")
     try:
         topic_key = request.topic.strip().upper()
-        topic = TOPIC_MAP.get(topic_key) or TOPIC_MAP.get(TOPIC_MAP_REVERSE.get(topic_key.lower()))
+        topic = TOPIC_MAP.get(topic_key)
         if not topic:
             raise HTTPException(status_code=400, detail="Invalid topic code. Use TIR, EP, or SS.")
 
-        filtered = pd.DataFrame()
-        display_city, display_state = None, None
-
         if request.city.isdigit() and len(request.city) == 5:
             filtered = df[(df['topic'] == topic) & (df['zip_code'].astype(str) == request.city)]
-            if not filtered.empty:
-                display_city = filtered.iloc[0]['city']
-                display_state = filtered.iloc[0]['state']
+            display_city = filtered.iloc[0]['city'] if not filtered.empty else request.city
+            display_state = filtered.iloc[0]['state'] if not filtered.empty else ""
         else:
             city = request.city.strip().lower()
             state = request.state.strip().upper()
@@ -97,13 +70,18 @@ async def run_vor(request: VORRequest):
         if filtered.empty:
             raise HTTPException(status_code=404, detail="No matching events found.")
 
-        scored = calculate_scores(filtered)
         today = pd.Timestamp.today()
-        venues = []
+        filtered = filtered.copy()
+        filtered['attendance_rate'] = filtered['attended_hh'] / filtered['gross_registrants']
+        filtered['fulfillment_pct'] = filtered['attended_hh'] / (filtered['registration_max'] / 2.4)
+        filtered['cpa'] = filtered['fb_cpr'] / filtered['attendance_rate']
+        filtered['score'] = (1 / filtered['cpa'] * 0.5) + (filtered['fulfillment_pct'] * 0.3) + (filtered['attendance_rate'] * 0.2)
+        filtered['score'] = filtered['score'] * 40
 
         preferred_times = ["11:00", "11:30", "18:00", "18:30"]
+        venues = []
 
-        for venue_name, group in scored.groupby("venue"):
+        for venue_name, group in filtered.groupby("venue"):
             group_sorted = group.sort_values("event_date", ascending=False)
             recent_event = group_sorted.iloc[0]
             used_recently = (today - recent_event['event_date']).days < 60
@@ -120,25 +98,21 @@ async def run_vor(request: VORRequest):
                 'attendance_rate': 'mean'
             }).dropna()
             time_scores['cpa'] = time_scores['fb_cpr'] / time_scores['attendance_rate']
+
             preferred_cpa = time_scores.loc[time_scores.index.isin(preferred_times), 'cpa']
             best_preferred_cpa = preferred_cpa.min() if not preferred_cpa.empty else 9999
 
-            good_times = time_scores[time_scores.index.isin(preferred_times)].copy()
-            good_times = good_times.append(
-                time_scores[~time_scores.index.isin(preferred_times)][
-                    time_scores['cpa'] < 70
-                ]
-            )
-            good_times = good_times.append(
-                time_scores[~time_scores.index.isin(preferred_times)][
-                    time_scores['cpa'] < best_preferred_cpa
-                ]
-            )
-            good_times = good_times[~good_times.index.duplicated()]
+            base_times = time_scores[time_scores.index.isin(preferred_times)]
+            extras = time_scores[~time_scores.index.isin(preferred_times)]
+            good_times = pd.concat([
+                base_times,
+                extras[extras['cpa'] < 70],
+                extras[extras['cpa'] < best_preferred_cpa]
+            ]).drop_duplicates()
             best_times = ", ".join(sorted(good_times.index.tolist())) or "Not enough data"
 
             venues.append({
-                "🥇 Venue": venue_name,
+                "🏛️ Venue": venue_name,
                 "📍 City, State": f"{display_city}, {display_state}",
                 "📅 Most Recent": recent_event['event_date'].strftime("%Y-%m-%d"),
                 "🗓️ Number of Events": len(group),
@@ -160,8 +134,6 @@ async def run_vor(request: VORRequest):
     except Exception as e:
         logger.exception("Failed to process VOR.")
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
-
-
 
 
 
