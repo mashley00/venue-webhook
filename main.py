@@ -1,11 +1,9 @@
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
 import datetime
-import math
-import traceback
 
 # ---- Constants ----
 S3_URL = "https://acquireup-venue-data.s3.us-east-2.amazonaws.com/all_events_23_25.csv"
@@ -22,7 +20,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---- Response Model ----
+# ---- Request & Response Models ----
+class VORRequest(BaseModel):
+    topic: str
+    city: str
+    state: str
+    miles: Optional[float] = 6.0
+
 class VenueRecommendation(BaseModel):
     venue: str
     city: str
@@ -67,23 +71,21 @@ except Exception as e:
 
 # ---- Endpoint ----
 @app.post("/vor", response_model=List[VenueRecommendation])
-def get_vor(
-    topic: str = Query(..., description="Seminar topic (TIR, EP, or SS)"),
-    city: str = Query(...),
-    state: str = Query(...),
-    miles: Optional[float] = Query(6.0)
-):
+def get_vor(request: VORRequest):
     try:
         reference_date = datetime.datetime.now()
-        topic_map = {"TIR": "taxes_in_retirement_567", "EP": "estate_planning_567", "SS": "social_security_567"}
-
-        if topic not in topic_map:
+        topic_map = {
+            "TIR": "taxes_in_retirement_567",
+            "EP": "estate_planning_567",
+            "SS": "social_security_567"
+        }
+        if request.topic not in topic_map:
             raise HTTPException(status_code=400, detail="Invalid topic. Must be one of: TIR, EP, SS")
 
         df_filtered = df[
-            (df['topic'].str.lower() == topic_map[topic].lower()) &
-            (df['city'].str.lower() == city.lower()) &
-            (df['state'].str.lower() == state.lower()) &
+            (df['topic'].str.lower() == topic_map[request.topic].lower()) &
+            (df['city'].str.lower() == request.city.lower()) &
+            (df['state'].str.lower() == request.state.lower()) &
             (df['event_date'].notnull())
         ].copy()
 
@@ -128,8 +130,8 @@ def get_vor(
 
             results.append(VenueRecommendation(
                 venue=row['venue'],
-                city=city,
-                state=state,
+                city=request.city,
+                state=request.state,
                 most_recent_event=row['event_date'].strftime('%Y-%m-%d'),
                 number_of_events=int(row['attended_hh']),
                 avg_gross_registrants=round(row['gross_registrants'], 2),
@@ -147,10 +149,7 @@ def get_vor(
         return results
 
     except Exception as e:
-        tb = traceback.format_exc()
-        print("VOR Exception Traceback:\n", tb)
         raise HTTPException(status_code=500, detail=f"Error generating report: {str(e)}")
-
 
 
 
