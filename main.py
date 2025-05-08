@@ -31,6 +31,13 @@ except Exception as e:
     logger.exception("Failed to load or process CSV file.")
     raise e
 
+# --- Topic Map ---
+TOPIC_MAP = {
+    "TIR": "taxes_in_retirement_567",
+    "EP": "estate_planning_567",
+    "SS": "social_security_567"
+}
+
 # --- Pydantic Input Model ---
 class VORRequest(BaseModel):
     topic: str = Field(..., description="Seminar topic code: TIR, EP, or SS")
@@ -40,14 +47,10 @@ class VORRequest(BaseModel):
 
 # --- Utility for filtering and scoring ---
 def calculate_scores(filtered_df: pd.DataFrame) -> pd.DataFrame:
-    # Defensive copy
     df = filtered_df.copy()
-
-    # Drop rows with missing required fields
     required_cols = ['attended_hh', 'gross_registrants', 'registration_max', 'fb_cpr']
     df.dropna(subset=required_cols, inplace=True)
 
-    # Metric Calculations
     df['attendance_rate'] = df['attended_hh'] / df['gross_registrants']
     df['fulfillment_pct'] = df['attended_hh'] / (df['registration_max'] / 2.4)
     df['score'] = (1 / df['fb_cpr'] * 0.5) + (df['fulfillment_pct'] * 0.3) + (df['attendance_rate'] * 0.2)
@@ -61,16 +64,19 @@ async def run_vor(request: VORRequest):
     logger.info(f"Received /vor request: {request.dict()}")
 
     try:
-        topic = request.topic.upper()
-        city = request.city.lower()
-        state = request.state.upper()
+        topic_key = request.topic.strip().upper()
+        topic = TOPIC_MAP.get(topic_key)
+        if not topic:
+            raise HTTPException(status_code=400, detail="Invalid topic code. Use TIR, EP, or SS.")
+
+        city = request.city.strip().lower()
+        state = request.state.strip().upper()
         miles = float(request.miles)
 
-        # Filter logic — basic example by city/state/topic
         filtered = df[
-            (df['topic'] == topic) &
-            (df['city'].str.lower() == city) &
-            (df['state'].str.upper() == state)
+            (df['topic'].str.strip().str.lower() == topic.lower()) &
+            (df['city'].str.strip().str.lower() == city) &
+            (df['state'].str.strip().str.upper() == state)
         ]
 
         if filtered.empty:
