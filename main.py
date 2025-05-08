@@ -20,7 +20,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---- Request & Response Models ----
+# ---- Models ----
 class VORRequest(BaseModel):
     topic: str
     city: str
@@ -73,26 +73,26 @@ except Exception as e:
 @app.post("/vor", response_model=List[VenueRecommendation])
 def get_vor(request: VORRequest):
     try:
+        topic = request.topic
+        city = request.city
+        state = request.state
+        miles = request.miles
+
         reference_date = datetime.datetime.now()
-        topic_map = {
-            "TIR": "taxes_in_retirement_567",
-            "EP": "estate_planning_567",
-            "SS": "social_security_567"
-        }
-        if request.topic not in topic_map:
+        topic_map = {"TIR": "taxes_in_retirement_567", "EP": "estate_planning_567", "SS": "social_security_567"}
+        if topic not in topic_map:
             raise HTTPException(status_code=400, detail="Invalid topic. Must be one of: TIR, EP, SS")
 
         df_filtered = df[
-            (df['topic'].str.lower() == topic_map[request.topic].lower()) &
-            (df['city'].str.lower() == request.city.lower()) &
-            (df['state'].str.lower() == request.state.lower()) &
+            (df['topic'].str.lower() == topic_map[topic].lower()) &
+            (df['city'].str.lower() == city.lower()) &
+            (df['state'].str.lower() == state.lower()) &
             (df['event_date'].notnull())
         ].copy()
 
         if df_filtered.empty:
             raise HTTPException(status_code=404, detail="No matching venue data found.")
 
-        # Compute metrics
         df_filtered['attendance_rate'] = df_filtered['attended_hh'] / df_filtered['gross_registrants']
         df_filtered['fulfillment_pct'] = df_filtered['attended_hh'] / (df_filtered['registration_max'] / 2.4)
         df_filtered['cost_per_verified_hh'] = df_filtered['fb_cpr'] / df_filtered['attendance_rate']
@@ -118,7 +118,7 @@ def get_vor(request: VORRequest):
             (1 / grouped['cost_per_verified_hh']) * 0.5 +
             grouped['fulfillment_pct'] * 0.3 +
             grouped['attendance_rate'] * 0.2
-        ) * 100  # Convert to 100 pt scale
+        ) * 100
 
         grouped = grouped.sort_values(by='score', ascending=False).head(4)
 
@@ -130,8 +130,8 @@ def get_vor(request: VORRequest):
 
             results.append(VenueRecommendation(
                 venue=row['venue'],
-                city=request.city,
-                state=request.state,
+                city=city,
+                state=state,
                 most_recent_event=row['event_date'].strftime('%Y-%m-%d'),
                 number_of_events=int(row['attended_hh']),
                 avg_gross_registrants=round(row['gross_registrants'], 2),
@@ -150,8 +150,6 @@ def get_vor(request: VORRequest):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error generating report: {str(e)}")
-
-
 
 
 
