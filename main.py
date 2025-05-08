@@ -45,6 +45,11 @@ class VORRequest(BaseModel):
     state: str
     miles: Optional[Union[int, float]] = 6.0
 
+# --- Health Check Endpoint ---
+@app.get("/health")
+async def health_check():
+    return {"status": "ok", "message": "VenueGPT API is live."}
+
 # --- Utility for filtering and scoring ---
 def calculate_scores(filtered_df: pd.DataFrame) -> pd.DataFrame:
     df = filtered_df.copy()
@@ -58,7 +63,7 @@ def calculate_scores(filtered_df: pd.DataFrame) -> pd.DataFrame:
 
     return df.sort_values(by='score', ascending=False)
 
-# --- Endpoint ---
+# --- Main VOR Endpoint ---
 @app.post("/vor")
 async def run_vor(request: VORRequest):
     logger.info(f"Received /vor request: {request.dict()}")
@@ -73,7 +78,6 @@ async def run_vor(request: VORRequest):
         state = request.state.strip().upper()
         miles = float(request.miles)
 
-        # Filter data
         filtered = df[
             (df['topic'].str.strip().str.lower() == topic.lower()) &
             (df['city'].str.strip().str.lower() == city) &
@@ -102,6 +106,7 @@ async def run_vor(request: VORRequest):
     except Exception as e:
         logger.exception("Failed during scoring or result formatting.")
         raise HTTPException(status_code=500, detail=f"Scoring error: {str(e)}")
+
 
 
 
