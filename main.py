@@ -6,11 +6,9 @@ import pandas as pd
 import logging
 from datetime import datetime
 
-# --- Logging ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("VenueGPT")
 
-# --- App Setup ---
 app = FastAPI(title="Venue Optimization API", version="1.0.0")
 
 app.add_middleware(
@@ -20,24 +18,25 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-# --- Load dataset ---
 CSV_URL = "https://acquireup-venue-data.s3.us-east-2.amazonaws.com/all_events_23_25.csv"
 
 try:
     df = pd.read_csv(CSV_URL, encoding="utf-8")
     df.columns = df.columns.str.lower().str.replace(" ", "_").str.replace(r"[^\w\s]", "", regex=True)
     df['event_date'] = pd.to_datetime(df['event_date'], errors='coerce')
+    df['event_day'] = df['event_date'].dt.day_name()
+    df['event_time'] = df['event_time'].str.strip()
     logger.info(f"Loaded dataset: {df.shape}")
 except Exception as e:
     logger.exception("Error loading dataset.")
     raise e
 
-# --- Topic Mapping ---
 TOPIC_MAP = {
     "TIR": "taxes_in_retirement_567",
     "EP": "estate_planning_567",
     "SS": "social_security_567"
 }
+
 TOPIC_MAP_REVERSE = {
     "taxes in retirement": "TIR",
     "taxes_in_retirement_567": "TIR",
@@ -47,10 +46,9 @@ TOPIC_MAP_REVERSE = {
     "social_security_567": "SS"
 }
 
-# --- Schema ---
 class VORRequest(BaseModel):
     topic: str
-    city: str  # can be city or ZIP
+    city: str
     state: Optional[str] = None
     miles: Optional[Union[int, float]] = 6.0
 
@@ -58,7 +56,6 @@ class VORRequest(BaseModel):
 async def health_check():
     return {"status": "ok"}
 
-# --- Scoring ---
 def calculate_scores(df):
     df = df.copy()
     df.dropna(subset=['attended_hh', 'gross_registrants', 'registration_max', 'fb_cpr'], inplace=True)
@@ -69,23 +66,20 @@ def calculate_scores(df):
     df['score'] = df['score'] * 40
     return df
 
-# --- Main Endpoint ---
 @app.post("/vor")
 async def run_vor(request: VORRequest):
     logger.info(f"Received VOR request: {request.dict()}")
     try:
-        topic_input = request.topic.strip().upper()
-        topic_code = TOPIC_MAP.get(topic_input) or TOPIC_MAP.get(TOPIC_MAP_REVERSE.get(topic_input.lower()))
-        if not topic_code:
+        topic_key = request.topic.strip().upper()
+        topic = TOPIC_MAP.get(topic_key) or TOPIC_MAP.get(TOPIC_MAP_REVERSE.get(topic_key.lower()))
+        if not topic:
             raise HTTPException(status_code=400, detail="Invalid topic code. Use TIR, EP, or SS.")
 
         filtered = pd.DataFrame()
-        display_city = None
-        display_state = None
+        display_city, display_state = None, None
 
-        if request.city.strip().isdigit() and len(request.city.strip()) == 5:
-            zip_code = request.city.strip()
-            filtered = df[(df['topic'] == topic_code) & (df['zip_code'].astype(str) == zip_code)]
+        if request.city.isdigit() and len(request.city) == 5:
+            filtered = df[(df['topic'] == topic) & (df['zip_code'].astype(str) == request.city)]
             if not filtered.empty:
                 display_city = filtered.iloc[0]['city']
                 display_state = filtered.iloc[0]['state']
@@ -93,7 +87,7 @@ async def run_vor(request: VORRequest):
             city = request.city.strip().lower()
             state = request.state.strip().upper()
             filtered = df[
-                (df['topic'] == topic_code) &
+                (df['topic'] == topic) &
                 (df['city'].str.strip().str.lower() == city) &
                 (df['state'].str.strip().str.upper() == state)
             ]
@@ -107,6 +101,8 @@ async def run_vor(request: VORRequest):
         today = pd.Timestamp.today()
         venues = []
 
+        preferred_times = ["11:00", "11:30", "18:00", "18:30"]
+
         for venue_name, group in scored.groupby("venue"):
             group_sorted = group.sort_values("event_date", ascending=False)
             recent_event = group_sorted.iloc[0]
@@ -114,17 +110,32 @@ async def run_vor(request: VORRequest):
             disclosure = recent_event.get("venue_disclosure", "FALSE")
             image_ok = recent_event.get("image_allowed", "FALSE")
 
-            pred_group = group.dropna(subset=['fb_registrants', 'fb_days_running', 'fb_reach', 'fb_impressions'])
-            if not pred_group.empty:
-                total_fb_reg = pred_group['fb_registrants'].sum()
-                total_fb_days = pred_group['fb_days_running'].sum()
-                total_reach = pred_group['fb_reach'].sum()
-                total_impr = pred_group['fb_impressions'].sum()
-                est_leads = round((total_fb_reg / total_fb_days) * 14) if total_fb_days else "N/A"
-                reg_per_1k_reach = round(total_fb_reg / total_reach * 1000, 2) if total_reach else "N/A"
-                reg_per_1k_impr = round(total_fb_reg / total_impr * 1000, 2) if total_impr else "N/A"
-            else:
-                est_leads = reg_per_1k_reach = reg_per_1k_impr = "N/A"
+            best_day_scores = group.groupby("event_day").apply(
+                lambda x: (x['attendance_rate'].mean() + x['fulfillment_pct'].mean()) / 2
+            ).sort_values(ascending=False)
+            best_days = ", ".join(best_day_scores.head(2).index.tolist())
+
+            time_scores = group.groupby("event_time").agg({
+                'fb_cpr': 'mean',
+                'attendance_rate': 'mean'
+            }).dropna()
+            time_scores['cpa'] = time_scores['fb_cpr'] / time_scores['attendance_rate']
+            preferred_cpa = time_scores.loc[time_scores.index.isin(preferred_times), 'cpa']
+            best_preferred_cpa = preferred_cpa.min() if not preferred_cpa.empty else 9999
+
+            good_times = time_scores[time_scores.index.isin(preferred_times)].copy()
+            good_times = good_times.append(
+                time_scores[~time_scores.index.isin(preferred_times)][
+                    time_scores['cpa'] < 70
+                ]
+            )
+            good_times = good_times.append(
+                time_scores[~time_scores.index.isin(preferred_times)][
+                    time_scores['cpa'] < best_preferred_cpa
+                ]
+            )
+            good_times = good_times[~good_times.index.duplicated()]
+            best_times = ", ".join(sorted(good_times.index.tolist())) or "Not enough data"
 
             venues.append({
                 "🥇 Venue": venue_name,
@@ -139,22 +150,16 @@ async def run_vor(request: VORRequest):
                 "📸 Image Allowed": "✅" if image_ok == "TRUE" else "❌",
                 "⚠️ Disclosure Needed": "🟥" if disclosure == "TRUE" else "✅",
                 "🚨 Recency Flag": "⚠️ Used <60d" if used_recently else "✅ OK",
-                "⏰ Best Times": ", ".join(sorted(set(group_sorted['event_time'].dropna()))) or "Not enough data",
+                "📅 Best Days": best_days,
+                "⏰ Best Times": best_times,
                 "🏅 Score": f"{round(group['score'].mean(), 2)} / 40",
-                "🔮 Est. 14-Day Leads": est_leads,
-                "📊 Reg/1k Reach": reg_per_1k_reach,
-                "📊 Reg/1k Impressions": reg_per_1k_impr
             })
 
-        venues_sorted = sorted(venues, key=lambda v: float(v["🏅 Score"].split()[0]), reverse=True)
-        top_4 = venues_sorted[:4]
+        return sorted(venues, key=lambda x: float(x["🏅 Score"].split()[0]), reverse=True)[:4]
 
-        # 📌 Most Recently Used Venue
-        recent_event = scored.sort_values("event_date", ascending=False).iloc[0]
-        recent_venue_name = recent_event['venue']
-        if recent_venue_name not in [v["🥇 Venue"] for v in top_4]:
-            recent_block = {
-                "📌 Most Recently Used Venue": recent_venue_name,
+    except Exception as e:
+        logger.exception("Failed to process VOR.")
+        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
 
 
 
