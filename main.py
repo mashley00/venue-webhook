@@ -10,7 +10,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("VenueGPT")
 
 # --- FastAPI App Init ---
-app = FastAPI()
+app = FastAPI(
+    title="Venue Optimization API",
+    version="1.0.0"
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -31,11 +34,19 @@ except Exception as e:
     logger.exception("Failed to load or process CSV file.")
     raise e
 
-# --- Topic Map ---
+# --- Topic Maps ---
 TOPIC_MAP = {
     "TIR": "taxes_in_retirement_567",
     "EP": "estate_planning_567",
     "SS": "social_security_567"
+}
+TOPIC_MAP_REVERSE = {
+    "taxes in retirement": "TIR",
+    "taxes_in_retirement_567": "TIR",
+    "estate planning": "EP",
+    "estate_planning_567": "EP",
+    "social security": "SS",
+    "social_security_567": "SS"
 }
 
 # --- Pydantic Input Model ---
@@ -63,14 +74,23 @@ def calculate_scores(filtered_df: pd.DataFrame) -> pd.DataFrame:
 
     return df.sort_values(by='score', ascending=False)
 
-# --- Main VOR Endpoint ---
-@app.post("/vor")
+# --- Main Endpoint ---
+@app.post("/vor", summary="Get Venue Optimization Report")
 async def run_vor(request: VORRequest):
     logger.info(f"Received /vor request: {request.dict()}")
 
     try:
-        topic_key = request.topic.strip().upper()
+        input_topic = request.topic.strip()
+        topic_key = input_topic.upper()
+
+        # Handle full name or code
+        if topic_key not in TOPIC_MAP:
+            simplified = input_topic.lower().replace("_", " ").strip()
+            fallback_code = TOPIC_MAP_REVERSE.get(simplified)
+            topic_key = fallback_code or topic_key
+
         topic = TOPIC_MAP.get(topic_key)
+
         if not topic:
             raise HTTPException(status_code=400, detail="Invalid topic code. Use TIR, EP, or SS.")
 
@@ -106,6 +126,7 @@ async def run_vor(request: VORRequest):
     except Exception as e:
         logger.exception("Failed during scoring or result formatting.")
         raise HTTPException(status_code=500, detail=f"Scoring error: {str(e)}")
+
 
 
 
