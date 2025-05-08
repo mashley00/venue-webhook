@@ -10,7 +10,7 @@ from datetime import datetime
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("VenueGPT")
 
-# --- App ---
+# --- App Setup ---
 app = FastAPI(
     title="Venue Optimization API",
     version="1.0.0"
@@ -57,7 +57,6 @@ class VORRequest(BaseModel):
     state: str
     miles: Optional[Union[int, float]] = 6.0
 
-# --- Health Check ---
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
@@ -93,7 +92,6 @@ async def run_vor(request: VORRequest):
 
         city = request.city.strip().lower()
         state = request.state.strip().upper()
-        miles = float(request.miles)
 
         filtered = df[
             (df['topic'].str.strip().str.lower() == topic.lower()) &
@@ -116,11 +114,12 @@ async def run_vor(request: VORRequest):
             disclosure = recent_event.get("venue_disclosure", "FALSE")
             image_ok = recent_event.get("image_allowed", "FALSE")
 
-            # Predictive Metrics
-            pred_group = group.dropna(subset=['fb_registrants', 'fb_days', 'fb_reach', 'fb_impressions'])
+            pred_group = group.dropna(subset=[
+                'fb_registrants', 'fb_days_running', 'fb_reach', 'fb_impressions'
+            ])
             if not pred_group.empty:
                 total_fb_reg = pred_group['fb_registrants'].sum()
-                total_fb_days = pred_group['fb_days'].sum()
+                total_fb_days = pred_group['fb_days_running'].sum()
                 total_reach = pred_group['fb_reach'].sum()
                 total_impr = pred_group['fb_impressions'].sum()
 
