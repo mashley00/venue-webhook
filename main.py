@@ -63,7 +63,6 @@ def calculate_scores(filtered_df: pd.DataFrame) -> pd.DataFrame:
 async def run_vor(request: VORRequest):
     logger.info(f"Received /vor request: {request.dict()}")
 
-    # Normalize and map inputs
     try:
         topic_key = request.topic.strip().upper()
         topic = TOPIC_MAP.get(topic_key)
@@ -74,7 +73,7 @@ async def run_vor(request: VORRequest):
         state = request.state.strip().upper()
         miles = float(request.miles)
 
-        # Robust filter
+        # Filter data
         filtered = df[
             (df['topic'].str.strip().str.lower() == topic.lower()) &
             (df['city'].str.strip().str.lower() == city) &
@@ -85,7 +84,6 @@ async def run_vor(request: VORRequest):
         logger.exception("Failed during filtering.")
         raise HTTPException(status_code=500, detail=f"Filtering error: {str(e)}")
 
-    # Important: this MUST be outside the try block
     if filtered.empty:
         logger.warning("No matching events found after filtering.")
         raise HTTPException(status_code=404, detail="No matching events found.")
@@ -95,7 +93,8 @@ async def run_vor(request: VORRequest):
 
         result = scored.head(4)[[
             'venue', 'event_date', 'gross_registrants', 'attended_hh', 'fb_cpr',
-            'attendance_rate', 'fulfillment_pct', 'score', 'venue_image_allowed', 'venue_disclosure_needed'
+            'attendance_rate', 'fulfillment_pct', 'score',
+            'image_allowed', 'venue_disclosure'
         ]]
 
         return result.to_dict(orient="records")
@@ -103,8 +102,6 @@ async def run_vor(request: VORRequest):
     except Exception as e:
         logger.exception("Failed during scoring or result formatting.")
         raise HTTPException(status_code=500, detail=f"Scoring error: {str(e)}")
-
-
 
 
 
