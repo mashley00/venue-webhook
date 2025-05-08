@@ -1,14 +1,13 @@
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
 import datetime
-import math
 
 # ---- Constants ----
 S3_URL = "https://acquireup-venue-data.s3.us-east-2.amazonaws.com/all_events_23_25.csv"
-VERSION = "VenueGPT v1.0.0 - 2025-05-08"
+VERSION = "VenueGPT v1.0.1 - 2025-05-08"
 
 # ---- FastAPI App ----
 app = FastAPI(title="Venue Optimization Report", version=VERSION)
@@ -21,7 +20,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---- Response Model ----
+# ---- Request & Response Models ----
+class VORRequest(BaseModel):
+    topic: str
+    city: str
+    state: str
+    miles: Optional[float] = 6.0
+
 class VenueRecommendation(BaseModel):
     venue: str
     city: str
@@ -56,7 +61,7 @@ def best_times(times: List[str]) -> List[str]:
         return filtered[:2]
     return (filtered + times[:2])[:2]
 
-# ---- Load Data ----
+# ---- Load Data from S3 ----
 try:
     df = pd.read_csv(S3_URL)
     df.columns = [c.lower().strip().replace(" ", "_") for c in df.columns]
@@ -64,16 +69,15 @@ try:
 except Exception as e:
     raise RuntimeError(f"Error loading or processing data from S3: {e}")
 
-# ---- Endpoint ----
+# ---- POST Endpoint ----
 @app.post("/vor", response_model=List[VenueRecommendation])
-def get_vor(
-    topic: str = Query(..., description="Seminar topic (TIR, EP, or SS)"),
-    city: str = Query(...),
-    state: str = Query(...),
-    miles: Optional[float] = Query(6.0)
-):
+def get_vor(payload: VORRequest):
     try:
+        topic = payload.topic
+        city = payload.city
+        state = payload.state
         reference_date = datetime.datetime.now()
+
         topic_map = {"TIR": "taxes_in_retirement_567", "EP": "estate_planning_567", "SS": "social_security_567"}
         if topic not in topic_map:
             raise HTTPException(status_code=400, detail="Invalid topic. Must be one of: TIR, EP, SS")
@@ -146,10 +150,6 @@ def get_vor(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error generating report: {str(e)}")
-
-
-
-
 
 
 
