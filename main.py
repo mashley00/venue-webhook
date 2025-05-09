@@ -152,19 +152,24 @@ async def run_vor(request: VORRequest):
             response.append(f":rotating_light: Recency – {venue['used_recently']}")
             response.append(f":clock3: Best Times – {venue['best_times']} on {venue['best_days']}")
 
+        # Always include most recently used venue section
         response.append("\n**🕵️ Most Recently Used Venue in City:**")
         response.append(f"🏛️ {most_recent_venue['venue']}\n:date: {most_recent_venue['event_date'].strftime('%Y-%m-%d')}")
 
         response.append("\n**💬 Recommendation Summary:**")
-        response.append(f"Top Pick: {top_venues[0]['venue']}")
+        if top_venues:
+            response.append(f"Top Pick: {top_venues[0]['venue']}")
         response.append("✅ Strong performance across attendance, cost, and registration efficiency.")
         response.append("📅 Suggest paired sessions at 11:00 AM and 6:00 PM on same day if possible.")
 
-        return {"report": "\n".join(response)}
+        final_report = "\n".join(response)
+        logger.info(f"VOR response:\n{final_report}")
+        return {"report": final_report}
 
     except Exception as e:
         logger.exception("Failed to process VOR.")
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+
 
 
 
