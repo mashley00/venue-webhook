@@ -134,27 +134,28 @@ async def run_vor(request: VORRequest):
         top_venues = venues_sorted[:4]
         most_recent_venue = filtered.sort_values("event_date", ascending=False).iloc[0]
 
-        response = ["**📊 Top Venues:**"]
+        response = []
+        response.append("🕵️ Most Recently Used Venue in City:")
+        response.append(f"🏛️ {most_recent_venue['venue']}")
+        response.append(f"📅 {most_recent_venue['event_date'].strftime('%Y-%m-%d')}\n")
+
+        response.append("**📊 Top Venues:**")
         medals = ["🥇", "🥈", "🥉", "🏅"]
 
         for idx, venue in enumerate(top_venues):
-            response.append(f"\n{medals[idx]} {venue['venue']}")
-            response.append(f":round_pushpin: {venue['city']}, {venue['state']}")
-            response.append(f":date: Most Recent – {venue['most_recent']}")
-            response.append(f":spiral_calendar_pad: Events – {venue['num_events']}")
-            response.append(f":chart_with_upwards_trend: Avg. Registrants – {venue['avg_gross']}")
-            response.append(f":moneybag: Avg. CPA – {venue['avg_cpa']}")
-            response.append(f":dollar: Avg. CPR – {venue['avg_cpr']}")
-            response.append(f":chart_with_downwards_trend: Attendance Rate – {venue['attendance_rate']}")
-            response.append(f":dart: Fulfillment % – {venue['fulfillment_pct']}")
-            response.append(f":camera_with_flash: Image Allowed – {venue['image_allowed']}")
-            response.append(f":warning: Disclosure Needed – {venue['disclosure_needed']}")
-            response.append(f":rotating_light: Recency – {venue['used_recently']}")
-            response.append(f":clock3: Best Times – {venue['best_times']} on {venue['best_days']}")
-
-        # Always include most recently used venue section
-        response.append("\n**🕵️ Most Recently Used Venue in City:**")
-        response.append(f"🏛️ {most_recent_venue['venue']}\n:date: {most_recent_venue['event_date'].strftime('%Y-%m-%d')}")
+            response.append(f"{medals[idx]} {venue['venue']}")
+            response.append(f"📍 {venue['city']}, {venue['state']}")
+            response.append(f"📅 Most Recent – {venue['most_recent']}")
+            response.append(f"🗓️ Events – {venue['num_events']}")
+            response.append(f"📈 Avg. Registrants – {venue['avg_gross']}")
+            response.append(f"💰 Avg. CPA – {venue['avg_cpa']}")
+            response.append(f"💵 Avg. CPR – {venue['avg_cpr']}")
+            response.append(f"📉 Attendance Rate – {venue['attendance_rate']}")
+            response.append(f"🎯 Fulfillment % – {venue['fulfillment_pct']}")
+            response.append(f"📸 Image Allowed – {venue['image_allowed']}")
+            response.append(f"⚠️ Disclosure Needed – {venue['disclosure_needed']}")
+            response.append(f"⚠️ Recency – {venue['used_recently']}")
+            response.append(f"🕒 Best Times – {venue['best_times']} on {venue['best_days']}")
 
         response.append("\n**💬 Recommendation Summary:**")
         if top_venues:
