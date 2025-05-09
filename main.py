@@ -157,6 +157,11 @@ async def run_vor(request: VORRequest):
             response.append(f"⚠️ Recency – {venue['used_recently']}")
             response.append(f"🕒 Best Times – {venue['best_times']} on {venue['best_days']}")
 
+        # ✅ Add bottom copy for most recent venue before recommendation
+        response.append("\n🕵️ Most Recently Used Venue in City:")
+        response.append(f"🏛️ {most_recent_venue['venue']}")
+        response.append(f"📅 {most_recent_venue['event_date'].strftime('%Y-%m-%d')}")
+
         response.append("\n**💬 Recommendation Summary:**")
         if top_venues:
             response.append(f"Top Pick: {top_venues[0]['venue']}")
