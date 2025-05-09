@@ -112,45 +112,61 @@ async def run_vor(request: VORRequest):
             best_times = ", ".join(sorted(good_times.index.tolist())) or "Not enough data"
 
             venues.append({
-                "🏛️ Venue": venue_name,
-                "📍 City, State": f"{display_city}, {display_state}",
-                "📅 Most Recent": recent_event['event_date'].strftime("%Y-%m-%d"),
-                "🗓️ Number of Events": len(group),
-                "📈 Avg. Gross Registrants": round(group['gross_registrants'].mean(), 1),
-                "💵 Avg. CPR": f"${round(group['fb_cpr'].mean(), 2)}",
-                "💰 Avg. CPA": f"${round(group['cpa'].mean(), 2)}",
-                "📉 Attendance Rate": f"{round(group['attendance_rate'].mean() * 100, 1)}%",
-                "🎯 Fulfillment %": f"{round(group['fulfillment_pct'].mean() * 100, 1)}%",
-                "📸 Image Allowed": "✅" if image_ok == "TRUE" else "❌",
-                "⚠️ Disclosure Needed": "🟥" if disclosure == "TRUE" else "✅",
-                "🚨 Recency Flag": "⚠️ Used <60d" if used_recently else "✅ OK",
-                "📅 Best Days": best_days,
-                "⏰ Best Times": best_times,
-                "🏅 Score": f"{round(group['score'].mean(), 2)} / 40",
+                "venue": venue_name,
+                "city": display_city,
+                "state": display_state,
+                "most_recent": recent_event['event_date'].strftime("%Y-%m-%d"),
+                "num_events": len(group),
+                "avg_gross": round(group['gross_registrants'].mean(), 1),
+                "avg_cpr": f"${round(group['fb_cpr'].mean(), 2)}",
+                "avg_cpa": f"${round(group['cpa'].mean(), 2)}",
+                "attendance_rate": f"{round(group['attendance_rate'].mean() * 100, 1)}%",
+                "fulfillment_pct": f"{round(group['fulfillment_pct'].mean() * 100, 1)}%",
+                "image_allowed": "✅" if image_ok == "TRUE" else "❌",
+                "disclosure_needed": "🟥" if disclosure == "TRUE" else "✅",
+                "used_recently": "⚠️ Used <60d" if used_recently else "✅ OK",
+                "best_days": best_days,
+                "best_times": best_times,
+                "score": round(group['score'].mean(), 2),
             })
 
-        venues_sorted = sorted(venues, key=lambda x: float(x["🏅 Score"].split()[0]), reverse=True)
+        venues_sorted = sorted(venues, key=lambda x: float(x["score"]), reverse=True)
         top_venues = venues_sorted[:4]
-
         most_recent_venue = filtered.sort_values("event_date", ascending=False).iloc[0]
 
-        summary = ["\n**📊 Top Venues:**\n"]
-        for venue in top_venues:
-            summary.append("\n" + "\n".join([f"{key} {value}" for key, value in venue.items()]))
+        response = ["**📊 Top Venues:**"]
+        medals = ["🥇", "🥈", "🥉", "🏅"]
 
-        summary.append("\n**🕵️ Most Recently Used Venue in City:**\n")
-        summary.append(f"🏛️ {most_recent_venue['venue']}\n:date: {most_recent_venue['event_date'].strftime('%Y-%m-%d')}")
+        for idx, venue in enumerate(top_venues):
+            response.append(f"\n{medals[idx]} {venue['venue']}")
+            response.append(f":round_pushpin: {venue['city']}, {venue['state']}")
+            response.append(f":date: {venue['most_recent']}")
+            response.append(f":spiral_calendar_pad: {venue['num_events']} events")
+            response.append(f":chart_with_upwards_trend: Avg. Gross Registrants: {venue['avg_gross']}")
+            response.append(f":moneybag: Avg. CPA: {venue['avg_cpa']}")
+            response.append(f":dollar: Avg. CPR: {venue['avg_cpr']}")
+            response.append(f":chart_with_downwards_trend: Attendance Rate: {venue['attendance_rate']}")
+            response.append(f":dart: Fulfillment %: {venue['fulfillment_pct']}")
+            response.append(f":camera_with_flash: Image Allowed: {venue['image_allowed']}")
+            response.append(f":warning: Disclosure Needed: {venue['disclosure_needed']}")
+            response.append(f":rotating_light: Recency: {venue['used_recently']}")
+            response.append(f":sports_medal: Score: {venue['score']} / 40")
+            response.append(f":clock3: Best Times: {venue['best_times']} on {venue['best_days']}")
 
-        summary.append("\n**💬 Recommendation Summary:**\n")
-        summary.append(f"Top Pick: {top_venues[0]['🏛️ Venue']}")
-        summary.append("✅ Strong performance across attendance, cost, and registration efficiency.")
-        summary.append("📅 Suggest paired sessions at 11:00 AM and 6:00 PM on same day if possible.")
+        response.append("\n**🕵️ Most Recently Used Venue in City:**")
+        response.append(f"🏛️ {most_recent_venue['venue']}\n:date: {most_recent_venue['event_date'].strftime('%Y-%m-%d')}")
 
-        return {"report": "\n".join(summary)}
+        response.append("\n**💬 Recommendation Summary:**")
+        response.append(f"Top Pick: {top_venues[0]['venue']}")
+        response.append("✅ Strong performance across attendance, cost, and registration efficiency.")
+        response.append("📅 Suggest paired sessions at 11:00 AM and 6:00 PM on same day if possible.")
+
+        return {"report": "\n".join(response)}
 
     except Exception as e:
         logger.exception("Failed to process VOR.")
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+
 
 
 
