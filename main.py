@@ -129,11 +129,29 @@ async def run_vor(request: VORRequest):
                 "🏅 Score": f"{round(group['score'].mean(), 2)} / 40",
             })
 
-        return sorted(venues, key=lambda x: float(x["🏅 Score"].split()[0]), reverse=True)[:4]
+        venues_sorted = sorted(venues, key=lambda x: float(x["🏅 Score"].split()[0]), reverse=True)
+        top_venues = venues_sorted[:4]
+
+        most_recent_venue = filtered.sort_values("event_date", ascending=False).iloc[0]
+
+        summary = ["\n**📊 Top Venues:**\n"]
+        for venue in top_venues:
+            summary.append("\n" + "\n".join([f"{key} {value}" for key, value in venue.items()]))
+
+        summary.append("\n**🕵️ Most Recently Used Venue in City:**\n")
+        summary.append(f"🏛️ {most_recent_venue['venue']}\n:date: {most_recent_venue['event_date'].strftime('%Y-%m-%d')}")
+
+        summary.append("\n**💬 Recommendation Summary:**\n")
+        summary.append(f"Top Pick: {top_venues[0]['🏛️ Venue']}")
+        summary.append("✅ Strong performance across attendance, cost, and registration efficiency.")
+        summary.append("📅 Suggest paired sessions at 11:00 AM and 6:00 PM on same day if possible.")
+
+        return {"report": "\n".join(summary)}
 
     except Exception as e:
         logger.exception("Failed to process VOR.")
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+
 
 
 
