@@ -44,6 +44,9 @@ class VORRequest(BaseModel):
     state: Optional[str] = None
     miles: Optional[Union[int, float]] = 6.0
 
+def is_true(val):
+    return str(val).strip().upper() == "TRUE"
+
 def get_similar_cities(input_city, state, threshold=75):
     normalized_city = input_city.strip().lower()
     candidates = df[df['state'].str.strip().str.upper() == state]['city'].dropna().unique()
@@ -99,8 +102,8 @@ async def run_vor(request: VORRequest):
             group_sorted = group.sort_values("event_date", ascending=False)
             recent_event = group_sorted.iloc[0]
             used_recently = (today - recent_event['event_date']).days < 60
-            disclosure = recent_event.get("venue_disclosure", "FALSE")
-            image_ok = recent_event.get("image_allowed", "FALSE")
+            disclosure = is_true(recent_event.get("venue_disclosure"))
+            image_ok = is_true(recent_event.get("image_allowed"))
 
             best_day_scores = group.groupby("event_day").apply(
                 lambda x: (x['attendance_rate'].mean() + x['fulfillment_pct'].mean()) / 2
@@ -136,8 +139,8 @@ async def run_vor(request: VORRequest):
                 "avg_cpa": f"${round(group['cpa'].mean(), 2)}",
                 "attendance_rate": f"{round(group['attendance_rate'].mean() * 100, 1)}%",
                 "fulfillment_pct": f"{round(group['fulfillment_pct'].mean() * 100, 1)}%",
-                "image_allowed": "✅" if image_ok == "TRUE" else "❌",
-                "disclosure_needed": "🟥" if disclosure == "TRUE" else "✅",
+                "image_allowed": "✅" if image_ok else "❌",
+                "disclosure_needed": "🟥" if disclosure else "✅",
                 "used_recently": "⚠️ Used <60d" if used_recently else "✅ OK",
                 "best_days": best_days,
                 "best_times": best_times,
@@ -189,6 +192,7 @@ async def run_vor(request: VORRequest):
     except Exception as e:
         logger.exception("Failed to process VOR.")
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+
 
 
 
