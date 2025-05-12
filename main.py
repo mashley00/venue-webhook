@@ -5,6 +5,7 @@ from typing import Union, Optional
 import pandas as pd
 import logging
 from datetime import datetime
+from fuzzywuzzy import fuzz
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("VenueGPT")
@@ -43,6 +44,15 @@ class VORRequest(BaseModel):
     state: Optional[str] = None
     miles: Optional[Union[int, float]] = 6.0
 
+def get_similar_cities(input_city, state, threshold=85):
+    normalized_city = input_city.strip().lower()
+    candidates = df[df['state'].str.strip().str.upper() == state]['city'].unique()
+    matches = [
+        city for city in candidates
+        if fuzz.token_sort_ratio(normalized_city, city.strip().lower()) >= threshold
+    ]
+    return list(set(matches))  # unique list
+
 @app.post("/vor")
 async def run_vor(request: VORRequest):
     logger.info(f"Received VOR request: {request.dict()}")
@@ -57,14 +67,17 @@ async def run_vor(request: VORRequest):
             display_city = filtered.iloc[0]['city'] if not filtered.empty else request.city
             display_state = filtered.iloc[0]['state'] if not filtered.empty else ""
         else:
-            city = request.city.strip().lower()
+            city = request.city.strip()
             state = request.state.strip().upper()
+            similar_cities = get_similar_cities(city, state)
+            if not similar_cities:
+                raise HTTPException(status_code=404, detail="No similar city matches found.")
             filtered = df[
                 (df['topic'] == topic) &
-                (df['city'].str.strip().str.lower() == city) &
+                (df['city'].str.strip().str.lower().isin([c.strip().lower() for c in similar_cities])) &
                 (df['state'].str.strip().str.upper() == state)
             ]
-            display_city = request.city.strip().title()
+            display_city = ", ".join(sorted(set([c.title() for c in similar_cities])))
             display_state = state
 
         if filtered.empty:
@@ -140,6 +153,7 @@ async def run_vor(request: VORRequest):
         response.append(f"📅 {most_recent_venue['event_date'].strftime('%Y-%m-%d')}\n")
 
         response.append("**📊 Top Venues:**")
+        response.append(f"🔎 Included city variations: {display_city}")
         medals = ["🥇", "🥈", "🥉", "🏅"]
 
         for idx, venue in enumerate(top_venues):
@@ -157,7 +171,6 @@ async def run_vor(request: VORRequest):
             response.append(f"⚠️ Recency – {venue['used_recently']}")
             response.append(f"🕒 Best Times – {venue['best_times']} on {venue['best_days']}")
 
-        # ✅ Add bottom copy for most recent venue before recommendation
         response.append("\n🕵️ Most Recently Used Venue in City:")
         response.append(f"🏛️ {most_recent_venue['venue']}")
         response.append(f"📅 {most_recent_venue['event_date'].strftime('%Y-%m-%d')}")
@@ -175,6 +188,7 @@ async def run_vor(request: VORRequest):
     except Exception as e:
         logger.exception("Failed to process VOR.")
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+
 
 
 
