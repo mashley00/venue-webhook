@@ -44,14 +44,14 @@ class VORRequest(BaseModel):
     state: Optional[str] = None
     miles: Optional[Union[int, float]] = 6.0
 
-def get_similar_cities(input_city, state, threshold=85):
+def get_similar_cities(input_city, state, threshold=75):
     normalized_city = input_city.strip().lower()
-    candidates = df[df['state'].str.strip().str.upper() == state]['city'].unique()
+    candidates = df[df['state'].str.strip().str.upper() == state]['city'].dropna().unique()
     matches = [
         city for city in candidates
-        if fuzz.token_sort_ratio(normalized_city, city.strip().lower()) >= threshold
+        if fuzz.token_set_ratio(normalized_city, city.strip().lower()) >= threshold
     ]
-    return list(set(matches))  # unique list
+    return list(set(matches))
 
 @app.post("/vor")
 async def run_vor(request: VORRequest):
@@ -70,6 +70,7 @@ async def run_vor(request: VORRequest):
             city = request.city.strip()
             state = request.state.strip().upper()
             similar_cities = get_similar_cities(city, state)
+            logger.info(f"Fuzzy match candidates for '{city}, {state}': {similar_cities}")
             if not similar_cities:
                 raise HTTPException(status_code=404, detail="No similar city matches found.")
             filtered = df[
@@ -188,6 +189,7 @@ async def run_vor(request: VORRequest):
     except Exception as e:
         logger.exception("Failed to process VOR.")
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+
 
 
 
