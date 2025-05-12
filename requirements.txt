@@ -6,3 +6,5 @@ supabase==1.2.0
 httpx==0.24.1
 geopy>=2.3.0
 requests==2.31.0
+fuzzywuzzy
+python-Levenshtein
