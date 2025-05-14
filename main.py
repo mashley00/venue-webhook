@@ -269,7 +269,7 @@ async def predict_cpr(zip: Optional[str] = None, city: Optional[str] = None, sta
 
     fatigue_penalty = count_30 * 0.1
     rest_boost = min(days_since_last / 30, 1.0) * 0.2
-    topic_factor = {"EP": 0.9, "SS": 0.85, "TIR":_
+topic_factor = {"EP": 0.9, "SS": 0.85, "TIR": 1.15}.get(topic.upper(), 1.0) if topic else 1.0
 
 
 
