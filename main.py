@@ -243,6 +243,60 @@ async def market_health(zip: Optional[str] = None, city: Optional[str] = None, s
     </ul>
     """
     return HTMLResponse(html)
+@app.get("/predict-cpr", response_class=HTMLResponse)
+async def predict_cpr(zip: Optional[str] = None, city: Optional[str] = None, state: Optional[str] = None, topic: Optional[str] = None):
+    reference_date = pd.Timestamp.today()
+    topic_full = TOPIC_MAP.get(topic.upper()) if topic else None
+
+    if zip:
+        df['zip_code'] = df.get('zip_code', '').fillna('').astype(str).str.strip().str.zfill(5)
+        data = df[df['zip_code'].astype(str) == str(zip)]
+        area_label = f"ZIP Code {zip}"
+    elif city and state:
+        data = df[
+            (df['city'].str.strip().str.lower() == city.strip().lower()) &
+            (df['state'].str.strip().str.upper() == state.strip().upper())
+        ]
+        area_label = f"{city.title()}, {state.upper()}"
+    else:
+        return HTMLResponse("<h3>Please provide either ZIP code or city and state.</h3>", status_code=400)
+
+    if topic_full:
+        data = data[data['topic'] == topic_full]
+
+    if data.empty:
+        return HTMLResponse(f"<h3>No data found for {area_label} and topic {topic or 'any'}.</h3>", status_code=404)
+
+    last_date = data['event_date'].max()
+    days_since_last = (reference_date - last_date).days
+    count_30 = (data['event_date'] > (reference_date - timedelta(days=30))).sum()
+
+    recent_cpr = data.sort_values("event_date", ascending=False)['fb_cpr'].dropna().head(1)
+    if recent_cpr.empty:
+        return HTMLResponse(f"<h3>No CPR data available for {area_label}.</h3>", status_code=404)
+    last_cpr = recent_cpr.values[0]
+
+    # Prediction logic
+    fatigue_penalty = count_30 * 0.1
+    rest_boost = min(days_since_last / 30, 1.0) * 0.2
+    topic_factor = {"EP": 0.9, "SS": 0.85, "TIR": 1.15}.get(topic.upper(), 1.0) if topic else 1.0
+    delta = rest_boost - fatigue_penalty
+    predicted_cpr = last_cpr * (1 + delta) * topic_factor
+
+    trend_icon = "📉" if delta < 0 else "📈"
+    trend_text = "Expected to decrease" if delta < 0 else "Expected to increase"
+
+    html = f"""
+    <h2>Predicted CPR for {area_label}</h2>
+    <p><b>Topic:</b> {topic or 'All Topics'}</p>
+    <p><b>Most Recent Event:</b> {last_date.strftime('%Y-%m-%d')}</p>
+    <p><b>Days Since Last Event:</b> {days_since_last} days</p>
+    <p><b>Events in Last 30 Days:</b> {count_30}</p>
+    <p><b>Last Known CPR:</b> ${round(last_cpr, 2)}</p>
+    <h3>{trend_icon} Predicted CPR: ${round(predicted_cpr, 2)}</h3>
+    <p>{trend_text} by approx. {round(delta * 100, 1)}%</p>
+    """
+    return HTMLResponse(html)
 
 # Serve the UI form
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
