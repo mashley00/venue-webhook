@@ -1,104 +1,59 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Venue Optimization Report</title>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      margin: 2rem;
-      max-width: 600px;
-    }
-    h2 {
-      color: #333;
-    }
-    label {
-      display: block;
-      margin-top: 1em;
-      font-weight: bold;
-    }
-    input, select, button {
-      margin-top: 0.3em;
-      padding: 0.5em;
-      width: 100%;
-      box-sizing: border-box;
-    }
-    button {
-      margin-top: 1.5em;
-      background-color: #007BFF;
-      color: white;
-      border: none;
-      cursor: pointer;
-    }
-    button:hover {
-      background-color: #0056b3;
-    }
-    pre {
-      background: #f4f4f4;
-      padding: 1em;
-      white-space: pre-wrap;
-      word-wrap: break-word;
-    }
-  </style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Venue Optimization</title>
 </head>
 <body>
-  <h2>Run Venue Optimization Report</h2>
-  <form id="vorForm">
-    <label for="topic">Seminar Topic:</label>
-    <select id="topic" required>
-      <option value="TIR">Taxes in Retirement</option>
-      <option value="EP">Estate Planning</option>
-      <option value="SS">Social Security</option>
-    </select>
+  <h1>📍 Venue Optimization Request</h1>
 
-    <label for="city">City:</label>
-    <input type="text" id="city" required placeholder="e.g. Troy">
+  <form id="vor-form">
+    <label>Seminar Topic (TIR, EP, SS):<br/>
+      <input name="topic" placeholder="TIR" required />
+    </label><br/><br/>
 
-    <label for="state">State:</label>
-    <input type="text" id="state" maxlength="2" required placeholder="e.g. MI">
+    <label>City:<br/>
+      <input name="city" placeholder="Frisco" required />
+    </label><br/><br/>
 
-    <label for="miles">Search Radius (miles):</label>
-    <input type="number" id="miles" value="6" min="1">
+    <label>State (e.g. TX):<br/>
+      <input name="state" placeholder="TX" maxlength="2" required />
+    </label><br/><br/>
 
-    <button type="submit">Generate Report</button>
+    <button type="submit">Run VOR</button>
   </form>
 
-  <h3>Results:</h3>
-  <pre id="result">Enter your criteria above and click "Generate Report".</pre>
+  <hr />
+
+  <h3>📊 Report Output:</h3>
+  <pre id="result" style="background:#f6f6f6; padding:1em; border:1px solid #ccc;"></pre>
 
   <script>
-    document.getElementById("vorForm").addEventListener("submit", async function(e) {
+    document.getElementById("vor-form").addEventListener("submit", async function (e) {
       e.preventDefault();
-
-      const data = {
-        topic: document.getElementById("topic").value,
-        city: document.getElementById("city").value,
-        state: document.getElementById("state").value,
-        miles: parseFloat(document.getElementById("miles").value)
+      const form = e.target;
+      const body = {
+        topic: form.topic.value.trim(),
+        city: form.city.value.trim(),
+        state: form.state.value.trim()
       };
 
-      const resultEl = document.getElementById("result");
-      resultEl.textContent = "Running report...";
+      const res = await fetch("/vor", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(body)
+      });
 
-      try {
-        const res = await fetch("/vor", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(data)
-        });
+      const data = await res.json();
+      document.getElementById("result").textContent = data.report || JSON.stringify(data, null, 2);
+    });
+  </script>
+</body>
+</html>
 
-        if (!res.ok) {
-          const errorData = await res.json();
-          resultEl.textContent = `Error: ${errorData.detail || res.statusText}`;
-          return;
-        }
-
-        const output = await res.json();
-        resultEl.textContent = output.report || "No report returned.";
-      } catch (error) {
-        resultEl.textContent = "An error occurred. Please try again.";
-        console.error("Request failed:", error);
-      }
     });
   </script>
 </body>
