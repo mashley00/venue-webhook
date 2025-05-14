@@ -29,6 +29,7 @@ try:
     df['event_date'] = pd.to_datetime(df['event_date'], errors='coerce')
     df['event_day'] = df['event_date'].dt.day_name()
     df['event_time'] = df['event_time'].str.strip()
+    df['zip_code'] = df.get('zip_code', '').fillna('').astype(str).str.strip().str.zfill(5)
     logger.info(f"Loaded dataset: {df.shape}")
 except Exception as e:
     logger.exception("Error loading dataset.")
@@ -199,12 +200,7 @@ async def run_vor(request: VORRequest):
 @app.get("/market-health", response_class=HTMLResponse)
 async def market_health(zip: Optional[str] = None, city: Optional[str] = None, state: Optional[str] = None, topic: Optional[str] = None):
     reference_date = pd.Timestamp.today()
-    if topic:
-        topic_full = TOPIC_MAP.get(topic.upper())
-        if not topic_full:
-            return HTMLResponse("<h3>Invalid topic. Use TIR, EP, or SS.</h3>", status_code=400)
-    else:
-        topic_full = None
+    topic_full = TOPIC_MAP.get(topic.upper()) if topic else None
 
     if zip:
         data = df[df['zip_code'].astype(str) == str(zip)]
@@ -243,13 +239,13 @@ async def market_health(zip: Optional[str] = None, city: Optional[str] = None, s
     </ul>
     """
     return HTMLResponse(html)
+
 @app.get("/predict-cpr", response_class=HTMLResponse)
 async def predict_cpr(zip: Optional[str] = None, city: Optional[str] = None, state: Optional[str] = None, topic: Optional[str] = None):
     reference_date = pd.Timestamp.today()
     topic_full = TOPIC_MAP.get(topic.upper()) if topic else None
 
     if zip:
-        df['zip_code'] = df.get('zip_code', '').fillna('').astype(str).str.strip().str.zfill(5)
         data = df[df['zip_code'].astype(str) == str(zip)]
         area_label = f"ZIP Code {zip}"
     elif city and state:
@@ -276,7 +272,6 @@ async def predict_cpr(zip: Optional[str] = None, city: Optional[str] = None, sta
         return HTMLResponse(f"<h3>No CPR data available for {area_label}.</h3>", status_code=404)
     last_cpr = recent_cpr.values[0]
 
-    # Prediction logic
     fatigue_penalty = count_30 * 0.1
     rest_boost = min(days_since_last / 30, 1.0) * 0.2
     topic_factor = {"EP": 0.9, "SS": 0.85, "TIR": 1.15}.get(topic.upper(), 1.0) if topic else 1.0
@@ -297,7 +292,7 @@ async def predict_cpr(zip: Optional[str] = None, city: Optional[str] = None, sta
     <p>{trend_text} by approx. {round(delta * 100, 1)}%</p>
     """
     return HTMLResponse(html)
-    
+
 @app.get("/market.html", response_class=HTMLResponse)
 async def serve_market():
     with open("static/market.html", "r") as f:
@@ -308,8 +303,8 @@ async def serve_predict():
     with open("static/predict.html", "r") as f:
         return HTMLResponse(content=f.read(), status_code=200)
 
-# Serve the UI form
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
+
 
 
 
