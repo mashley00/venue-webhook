@@ -38,7 +38,6 @@ except Exception as e:
     logger.exception("Error loading dataset.")
     raise e
 
-
 TOPIC_MAP = {
     "TIR": "taxes_in_retirement_567",
     "EP": "estate_planning_567",
@@ -62,7 +61,6 @@ def get_similar_cities(input_city, state, threshold=75):
         if fuzz.token_set_ratio(normalized_city, city.strip().lower()) >= threshold
     ]
     return list(set(matches))
-
 @app.post("/vor")
 async def run_vor(request: VORRequest):
     logger.info(f"Received VOR request: {request.dict()}")
@@ -153,7 +151,6 @@ async def run_vor(request: VORRequest):
                 "best_times": best_times,
                 "score": round(group['score'].mean(), 2),
             })
-
         venues_sorted = sorted(venues, key=lambda x: float(x["score"]), reverse=True)
         top_venues = venues_sorted[:4]
         most_recent_venue = filtered.sort_values("event_date", ascending=False).iloc[0]
@@ -183,16 +180,6 @@ async def run_vor(request: VORRequest):
             response.append(f"🕒 Best Times – {venue['best_times']} on {venue['best_days']}")
             response.append("---\n")
 
-        response.append("\n🕵️ Most Recently Used Venue in City:")
-        response.append(f"🏛️ {most_recent_venue['venue']}")
-        response.append(f"📅 {most_recent_venue['event_date'].strftime('%Y-%m-%d')}")
-
-        response.append("\n---\n**💬 Recommendation Summary:**")
-        if top_venues:
-            response.append(f"Top Pick: {top_venues[0]['venue']}")
-        response.append("✅ Strong performance across attendance, cost, and registration efficiency.")
-        response.append("📅 Suggest paired sessions at 11:00 AM and 6:00 PM on same day if possible.")
-
         final_report = "\n".join(response)
         logger.info(f"VOR response:\n{final_report}")
         return {"report": final_report}
@@ -201,14 +188,16 @@ async def run_vor(request: VORRequest):
         logger.exception("Failed to process VOR.")
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
 
+
 @app.get("/market-health", response_class=HTMLResponse)
 async def market_health(zip: Optional[str] = None, city: Optional[str] = None, state: Optional[str] = None, topic: Optional[str] = None):
     reference_date = pd.Timestamp.today()
     topic_full = TOPIC_MAP.get(topic.upper()) if topic else None
 
     if zip:
-        data = df[df['zip_code'].astype(str) == str(zip)]
-        area_label = f"ZIP Code {zip}"
+        zip_str = str(zip).strip().zfill(5)
+        data = df[df['zip_code'].astype(str).str.strip().str.zfill(5) == zip_str]
+        area_label = f"ZIP Code {zip_str}"
     elif city and state:
         data = df[
             (df['city'].str.strip().str.lower() == city.strip().lower()) &
@@ -244,14 +233,16 @@ async def market_health(zip: Optional[str] = None, city: Optional[str] = None, s
     """
     return HTMLResponse(html)
 
+
 @app.get("/predict-cpr", response_class=HTMLResponse)
 async def predict_cpr(zip: Optional[str] = None, city: Optional[str] = None, state: Optional[str] = None, topic: Optional[str] = None):
     reference_date = pd.Timestamp.today()
     topic_full = TOPIC_MAP.get(topic.upper()) if topic else None
 
     if zip:
-        data = df[df['zip_code'].astype(str) == str(zip)]
-        area_label = f"ZIP Code {zip}"
+        zip_str = str(zip).strip().zfill(5)
+        data = df[df['zip_code'].astype(str).str.strip().str.zfill(5) == zip_str]
+        area_label = f"ZIP Code {zip_str}"
     elif city and state:
         data = df[
             (df['city'].str.strip().str.lower() == city.strip().lower()) &
@@ -278,36 +269,7 @@ async def predict_cpr(zip: Optional[str] = None, city: Optional[str] = None, sta
 
     fatigue_penalty = count_30 * 0.1
     rest_boost = min(days_since_last / 30, 1.0) * 0.2
-    topic_factor = {"EP": 0.9, "SS": 0.85, "TIR": 1.15}.get(topic.upper(), 1.0) if topic else 1.0
-    delta = rest_boost - fatigue_penalty
-    predicted_cpr = last_cpr * (1 + delta) * topic_factor
-
-    trend_icon = "📉" if delta < 0 else "📈"
-    trend_text = "Expected to decrease" if delta < 0 else "Expected to increase"
-
-    html = f"""
-    <h2>Predicted CPR for {area_label}</h2>
-    <p><b>Topic:</b> {topic or 'All Topics'}</p>
-    <p><b>Most Recent Event:</b> {last_date.strftime('%Y-%m-%d')}</p>
-    <p><b>Days Since Last Event:</b> {days_since_last} days</p>
-    <p><b>Events in Last 30 Days:</b> {count_30}</p>
-    <p><b>Last Known CPR:</b> ${round(last_cpr, 2)}</p>
-    <h3>{trend_icon} Predicted CPR: ${round(predicted_cpr, 2)}</h3>
-    <p>{trend_text} by approx. {round(delta * 100, 1)}%</p>
-    """
-    return HTMLResponse(html)
-
-@app.get("/market.html", response_class=HTMLResponse)
-async def serve_market():
-    with open("static/market.html", "r") as f:
-        return HTMLResponse(content=f.read(), status_code=200)
-
-@app.get("/predict.html", response_class=HTMLResponse)
-async def serve_predict():
-    with open("static/predict.html", "r") as f:
-        return HTMLResponse(content=f.read(), status_code=200)
-
-app.mount("/", StaticFiles(directory="static", html=True), name="static")
+    topic_factor = {"EP": 0.9, "SS": 0.85, "TIR":_
 
 
 
