@@ -297,6 +297,16 @@ async def predict_cpr(zip: Optional[str] = None, city: Optional[str] = None, sta
     <p>{trend_text} by approx. {round(delta * 100, 1)}%</p>
     """
     return HTMLResponse(html)
+    
+@app.get("/market.html", response_class=HTMLResponse)
+async def serve_market():
+    with open("static/market.html", "r") as f:
+        return HTMLResponse(content=f.read(), status_code=200)
+
+@app.get("/predict.html", response_class=HTMLResponse)
+async def serve_predict():
+    with open("static/predict.html", "r") as f:
+        return HTMLResponse(content=f.read(), status_code=200)
 
 # Serve the UI form
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
