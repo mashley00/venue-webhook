@@ -6,6 +6,7 @@ import pandas as pd
 import logging
 from datetime import datetime
 from fuzzywuzzy import fuzz
+from fastapi.staticfiles import StaticFiles
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("VenueGPT")
@@ -174,12 +175,13 @@ async def run_vor(request: VORRequest):
             response.append(f"⚠️ Disclosure Needed – {venue['disclosure_needed']}")
             response.append(f"⚠️ Recency – {venue['used_recently']}")
             response.append(f"🕒 Best Times – {venue['best_times']} on {venue['best_days']}")
+            response.append("---\n")
 
         response.append("\n🕵️ Most Recently Used Venue in City:")
         response.append(f"🏛️ {most_recent_venue['venue']}")
         response.append(f"📅 {most_recent_venue['event_date'].strftime('%Y-%m-%d')}")
 
-        response.append("\n**💬 Recommendation Summary:**")
+        response.append("\n---\n**💬 Recommendation Summary:**")
         if top_venues:
             response.append(f"Top Pick: {top_venues[0]['venue']}")
         response.append("✅ Strong performance across attendance, cost, and registration efficiency.")
@@ -192,9 +194,10 @@ async def run_vor(request: VORRequest):
     except Exception as e:
         logger.exception("Failed to process VOR.")
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
-from fastapi.staticfiles import StaticFiles
 
+# Mount the static web UI
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
+
 
 
 
