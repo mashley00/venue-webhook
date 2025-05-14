@@ -1,1 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>CPR Prediction Tool</title>
+</head>
+<body>
+  <h2>📈 Predict CPR for Upcoming Campaign</h2>
+  <form action="/predict-cpr" method="get" target="_blank">
+    <label>Search by ZIP:</label><br>
+    <input type="text" name="zip" placeholder="e.g. 48084"><br><br>
+
+    <label>Or by City & State:</label><br>
+    <input type="text" name="city" placeholder="e.g. Troy">
+    <input type="text" name="state" placeholder="e.g. MI" maxlength="2"><br><br>
+
+    <label>Seminar Topic:</label><br>
+    <select name="topic">
+      <option value="">-- All Topics --</option>
+      <option value="TIR">Taxes in Retirement</option>
+      <option value="EP">Estate Planning</option>
+      <option value="SS">Social Security</option>
+    </select><br><br>
+
+    <button type="submit">📊 Predict CPR</button>
+  </form>
+
+  <hr>
+  <p><a href="/market.html">Check Market Health ↗️</a></p>
+  <p><a href="/">Back to Venue Optimizer ↩️</a></p>
+</body>
+</html>
 
