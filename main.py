@@ -1,12 +1,13 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Union, Optional
 import pandas as pd
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from fuzzywuzzy import fuzz
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("VenueGPT")
@@ -195,8 +196,57 @@ async def run_vor(request: VORRequest):
         logger.exception("Failed to process VOR.")
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
 
-# Mount the static web UI
+@app.get("/market-health", response_class=HTMLResponse)
+async def market_health(zip: Optional[str] = None, city: Optional[str] = None, state: Optional[str] = None, topic: Optional[str] = None):
+    reference_date = pd.Timestamp.today()
+    if topic:
+        topic_full = TOPIC_MAP.get(topic.upper())
+        if not topic_full:
+            return HTMLResponse("<h3>Invalid topic. Use TIR, EP, or SS.</h3>", status_code=400)
+    else:
+        topic_full = None
+
+    if zip:
+        data = df[df['zip_code'].astype(str) == str(zip)]
+        area_label = f"ZIP Code {zip}"
+    elif city and state:
+        data = df[
+            (df['city'].str.strip().str.lower() == city.strip().lower()) &
+            (df['state'].str.strip().str.upper() == state.strip().upper())
+        ]
+        area_label = f"{city.title()}, {state.upper()}"
+    else:
+        return HTMLResponse("<h3>Please provide either ZIP code or city and state.</h3>", status_code=400)
+
+    if topic_full:
+        data = data[data['topic'] == topic_full]
+
+    if data.empty:
+        return HTMLResponse(f"<h3>No data found for {area_label} and topic {topic or 'any'}.</h3>", status_code=404)
+
+    last_date = data['event_date'].max()
+    days_since_last = (reference_date - last_date).days
+    count_30 = (data['event_date'] > (reference_date - timedelta(days=30))).sum()
+    count_90 = (data['event_date'] > (reference_date - timedelta(days=90))).sum()
+    cpr_trend = data.sort_values('event_date').set_index('event_date')['fb_cpr'].rolling(3, min_periods=1).mean()
+
+    html = f"""
+    <h2>Market Health for {area_label}</h2>
+    <p><b>Topic:</b> {topic or 'All Topics'}</p>
+    <p><b>Most Recent Event:</b> {last_date.strftime('%Y-%m-%d')}</p>
+    <p><b>Days Since Last Event:</b> {days_since_last} days</p>
+    <p><b>Events in Last 30 Days:</b> {count_30}</p>
+    <p><b>Events in Last 90 Days:</b> {count_90}</p>
+    <h3>CPR Trend (last 5 entries)</h3>
+    <ul>
+    {''.join([f"<li>{d.strftime('%Y-%m-%d')}: ${round(v, 2)}</li>" for d, v in cpr_trend.tail(5).items()])}
+    </ul>
+    """
+    return HTMLResponse(html)
+
+# Serve the UI form
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
+
 
 
 
