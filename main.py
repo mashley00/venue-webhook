@@ -1,8 +1,3 @@
-this directly into Git:
-
-python
-Copy
-Edit
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
