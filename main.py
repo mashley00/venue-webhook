@@ -37,7 +37,7 @@ try:
     logger.info(f"Loaded dataset: {df.shape}")
 except Exception as e:
     logger.exception("Error loading dataset.")
-@@ -61,6 +58,68 @@
+
         if fuzz.token_set_ratio(normalized_city, city.strip().lower()) >= threshold
     ]
     return list(set(matches))
@@ -46,7 +46,7 @@ except Exception as e:
 @app.post("/vor")
 async def run_vor(request: VORRequest):
     logger.info(f"Received VOR request: {request.dict()}")
-@@ -71,7 +130,8 @@
+
             raise HTTPException(status_code=400, detail="Invalid topic code. Use TIR, EP, or SS.")
 
         if request.city.isdigit() and len(request.city) == 5:
@@ -56,7 +56,7 @@ async def run_vor(request: VORRequest):
             display_city = filtered.iloc[0]['city'] if not filtered.empty else request.city
             display_state = filtered.iloc[0]['state'] if not filtered.empty else ""
         else:
-@@ -151,15 +211,210 @@
+
                 "best_times": best_times,
                 "score": round(group['score'].mean(), 2),
             })
@@ -268,7 +268,7 @@ async def run_vor(request: VORRequest):
         response.append("**📊 Top Venues:**")
         response.append(f"🔎 Included city variations: {display_city}")
         medals = ["🥇", "🥈", "🥉", "🏅"]
-@@ -178,7 +433,13 @@
+
             response.append(f"⚠️ Disclosure Needed – {venue['disclosure_needed']}")
             response.append(f"⚠️ Recency – {venue['used_recently']}")
             response.append(f"🕒 Best Times – {venue['best_times']} on {venue['best_days']}")
@@ -283,7 +283,7 @@ async def run_vor(request: VORRequest):
 
         final_report = "\n".join(response)
         logger.info(f"VOR response:\n{final_report}")
-@@ -189,6 +450,7 @@
+
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
 
 
@@ -291,7 +291,7 @@ async def run_vor(request: VORRequest):
 @app.get("/market-health", response_class=HTMLResponse)
 async def market_health(zip: Optional[str] = None, city: Optional[str] = None, state: Optional[str] = None, topic: Optional[str] = None):
     reference_date = pd.Timestamp.today()
-@@ -233,11 +495,11 @@
+
     """
     return HTMLResponse(html)
 
@@ -305,7 +305,7 @@ async def predict_cpr(zip: Optional[str] = None, city: Optional[str] = None, sta
 
     if zip:
         zip_str = str(zip).strip().zfill(5)
-@@ -269,13 +531,36 @@
+
 
     fatigue_penalty = count_30 * 0.1
     rest_boost = min(days_since_last / 30, 1.0) * 0.2
