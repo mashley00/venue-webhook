@@ -32,15 +32,17 @@ try:
     df['event_day'] = df['event_date'].dt.day_name()
     df['event_time'] = df['event_time'].str.strip()
 
-    # ✅ Safe ZIP column handling
+    # ✅ Safe ZIP column handling INSIDE try block
     if 'zip_code' not in df.columns:
         df['zip_code'] = ''
     df['zip_code'] = df['zip_code'].fillna('').astype(str).str.strip().str.zfill(5)
 
     logger.info(f"Loaded dataset: {df.shape}")
+
 except Exception as e:
     logger.exception("Error loading dataset.")
     raise e
+
 
     logger.info(f"Loaded dataset: {df.shape}")
 except Exception as e:
