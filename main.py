@@ -21,6 +21,8 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
+app.include_router(mar_router)
+
 CSV_URL = "https://acquireup-venue-data.s3.us-east-2.amazonaws.com/all_events_23_25.csv"
 
 try:
