@@ -44,11 +44,6 @@ except Exception as e:
     raise e
 
 
-    logger.info(f"Loaded dataset: {df.shape}")
-except Exception as e:
-    logger.exception("Error loading dataset.")
-    raise e
-
 TOPIC_MAP = {
     "TIR": "taxes_in_retirement_567",
     "EP": "estate_planning_567",
