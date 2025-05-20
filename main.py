@@ -46,9 +46,6 @@ def get_similar_cities(input_city, state, threshold=75):
         if fuzz.token_set_ratio(normalized_city, city.strip().lower()) >= threshold
     ]
     return list(set(matches))
-    ]
-    return list(set(matches))
-
 
 @app.post("/vor")
 async def run_vor(request: VORRequest):
