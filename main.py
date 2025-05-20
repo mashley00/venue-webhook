@@ -41,66 +41,6 @@ except Exception as e:
         if fuzz.token_set_ratio(normalized_city, city.strip().lower()) >= threshold
     ]
     return list(set(matches))
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import Union, Optional
-import pandas as pd
-import logging
-from datetime import datetime, timedelta
-from fuzzywuzzy import fuzz
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("VenueGPT")
-
-app = FastAPI(title="Venue Optimization API", version="1.0.0")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"]
-)
-
-CSV_URL = "https://acquireup-venue-data.s3.us-east-2.amazonaws.com/all_events_23_25.csv"
-
-try:
-    df = pd.read_csv(CSV_URL, encoding="utf-8")
-    df.columns = df.columns.str.lower().str.replace(" ", "_").str.replace(r"[^\w\s]", "", regex=True)
-    df['event_date'] = pd.to_datetime(df['event_date'], errors='coerce')
-    df['event_day'] = df['event_date'].dt.day_name()
-    df['event_time'] = df['event_time'].str.strip()
-    df['zip_code'] = df.get('zip_code', '').fillna('').astype(str).str.strip().str.zfill(5)
-    logger.info(f"Loaded dataset: {df.shape}")
-except Exception as e:
-    logger.exception("Error loading dataset.")
-    raise e
-
-TOPIC_MAP = {
-    "TIR": "taxes_in_retirement_567",
-    "EP": "estate_planning_567",
-    "SS": "social_security_567"
-}
-
-class VORRequest(BaseModel):
-    topic: str
-    city: str
-    state: Optional[str] = None
-    miles: Optional[Union[int, float]] = 6.0
-
-def is_true(val):
-    return str(val).strip().upper() == "TRUE"
-
-def get_similar_cities(input_city, state, threshold=75):
-    normalized_city = input_city.strip().lower()
-    candidates = df[df['state'].str.strip().str.upper() == state]['city'].dropna().unique()
-    matches = [
-        city for city in candidates
-        if fuzz.token_set_ratio(normalized_city, city.strip().lower()) >= threshold
-    ]
-    return list(set(matches))
 
 
 @app.post("/vor")
