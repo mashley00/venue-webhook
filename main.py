@@ -9,11 +9,12 @@ from fuzzywuzzy import fuzz
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 
+# === Logging setup ===
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("VenueGPT")
 
+# === FastAPI setup ===
 app = FastAPI(title="Venue Optimization API", version="1.0.0")
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -21,117 +22,8 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
+# === Load Data ===
 CSV_URL = "https://acquireup-venue-data.s3.us-east-2.amazonaws.com/all_events_23_25.csv"
-
-try:
-    df = pd.read_csv(CSV_URL, encoding="utf-8")
-    df.columns = df.columns.str.lower().str.replace(" ", "_").str.replace(r"[^\w\s]", "", regex=True)
-    df['event_date'] = pd.to_datetime(df['event_date'], errors='coerce')
-    df['event_day'] = df['event_date'].dt.day_name()
-    df['event_time'] = df['event_time'].str.strip()
-    if 'zip_code' in df.columns:
-        df['zip_code'] = df['zip_code'].fillna('').astype(str).str.strip().str.zfill(5)
-    else:
-        df['zip_code'] = ''
-    df['zip_code'] = df.get('zip_code', '').fillna('').astype(str).str.strip().str.zfill(5)
-    logger.info(f"Loaded dataset: {df.shape}")
-except Exception as e:
-    logger.exception("Error loading dataset.")
-
-def get_similar_cities(input_city, state, threshold=75):
-    normalized_city = input_city.strip().lower()
-    candidates = df[df['state'].str.strip().str.upper() == state]['city'].dropna().unique()
-    matches = [
-        city for city in candidates
-        if fuzz.token_set_ratio(normalized_city, city.strip().lower()) >= threshold
-    ]
-    return list(set(matches))
-
-@app.post("/vor")
-async def run_vor(request: VORRequest):
-    logger.info(f"Received VOR request: {request.dict()}")
-
-            raise HTTPException(status_code=400, detail="Invalid topic code. Use TIR, EP, or SS.")
-
-        if request.city.isdigit() and len(request.city) == 5:
-            filtered = df[(df['topic'] == topic) & (df['zip_code'].astype(str) == request.city)]
-            zip_str = str(request.city).strip().zfill(5)
-            filtered = df[(df['topic'] == topic) & (df['zip_code'].astype(str).str.strip().str.zfill(5) == zip_str)]
-            display_city = filtered.iloc[0]['city'] if not filtered.empty else request.city
-            display_state = filtered.iloc[0]['state'] if not filtered.empty else ""
-        else:
-
-                "best_times": best_times,
-                "score": round(group['score'].mean(), 2),
-            })
-
-        venues_sorted = sorted(venues, key=lambda x: float(x["score"]), reverse=True)
-        top_venues = venues_sorted[:4]
-        most_recent_venue = filtered.sort_values("event_date", ascending=False).iloc[0]
-
-        response = []
-        response.append("🕵️ Most Recently Used Venue in City:")
-        response.append(f"🏛️ {most_recent_venue['venue']}")
-        response.append(f"📅 {most_recent_venue['event_date'].strftime('%Y-%m-%d')}\n")
-        response.append(f"📅 {most_recent_venue['event_date'].strftime('%Y-%m-%d')}")
-        response.append("**📊 Top Venues:**")
-        response.append(f"🔎 Included city variations: {display_city}")
-        medals = ["🥇", "🥈", "🥉", "🏅"]
-
-        for idx, venue in enumerate(top_venues):
-            response.append(f"{medals[idx]} {venue['venue']}")
-            response.append(f"📍 {venue['city']}, {venue['state']}")
-            response.append(f"📅 Most Recent – {venue['most_recent']}")
-            response.append(f"🗓️ Events – {venue['num_events']}")
-            response.append(f"📈 Avg. Registrants – {venue['avg_gross']}")
-            response.append(f"💰 Avg. CPA – {venue['avg_cpa']}")
-            response.append(f"💵 Avg. CPR – {venue['avg_cpr']}")
-            response.append(f"📉 Attendance Rate – {venue['attendance_rate']}")
-            response.append(f"🎯 Fulfillment % – {venue['fulfillment_pct']}")
-            response.append(f"📸 Image Allowed – {venue['image_allowed']}")
-            response.append(f"⚠️ Disclosure Needed – {venue['disclosure_needed']}")
-            response.append(f"⚠️ Recency – {venue['used_recently']}")
-            response.append(f"🕒 Best Times – {venue['best_times']} on {venue['best_days']}")
-            response.append("---")
-
-        response.append("**💬 Recommendation Summary:**")
-        if top_venues:
-            response.append(f"Top Pick: {top_venues[0]['venue']}")
-        response.append("✅ Strong performance across attendance, cost, and registration efficiency.")
-        response.append("📅 Suggest paired sessions at 11:00 AM and 6:00 PM on same day if possible.")
-
-        final_report = "\n".join(response)
-        logger.info(f"VOR response:\n{final_report}")
-        return {"report": final_report}
-
-    except Exception as e:
-        logger.exception("Failed to process VOR.")
-        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import Union, Optional
-import pandas as pd
-import logging
-from datetime import datetime, timedelta
-from fuzzywuzzy import fuzz
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("VenueGPT")
-
-app = FastAPI(title="Venue Optimization API", version="1.0.0")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"]
-)
-
-CSV_URL = "https://acquireup-venue-data.s3.us-east-2.amazonaws.com/all_events_23_25.csv"
-
 try:
     df = pd.read_csv(CSV_URL, encoding="utf-8")
     df.columns = df.columns.str.lower().str.replace(" ", "_").str.replace(r"[^\w\s]", "", regex=True)
@@ -144,6 +36,7 @@ except Exception as e:
     logger.exception("Error loading dataset.")
     raise e
 
+# === Constants and Helpers ===
 TOPIC_MAP = {
     "TIR": "taxes_in_retirement_567",
     "EP": "estate_planning_567",
@@ -168,7 +61,7 @@ def get_similar_cities(input_city, state, threshold=75):
     ]
     return list(set(matches))
 
-
+# === VOR Endpoint ===
 @app.post("/vor")
 async def run_vor(request: VORRequest):
     logger.info(f"Received VOR request: {request.dict()}")
@@ -180,7 +73,7 @@ async def run_vor(request: VORRequest):
 
         if request.city.isdigit() and len(request.city) == 5:
             zip_str = str(request.city).strip().zfill(5)
-            filtered = df[(df['topic'] == topic) & (df['zip_code'].astype(str).str.strip().str.zfill(5) == zip_str)]
+            filtered = df[(df['topic'] == topic) & (df['zip_code'].str.zfill(5) == zip_str)]
             display_city = filtered.iloc[0]['city'] if not filtered.empty else request.city
             display_state = filtered.iloc[0]['state'] if not filtered.empty else ""
         else:
@@ -272,11 +165,20 @@ async def run_vor(request: VORRequest):
         response.append("**📊 Top Venues:**")
         response.append(f"🔎 Included city variations: {display_city}")
         medals = ["🥇", "🥈", "🥉", "🏅"]
-
+        for idx, venue in enumerate(top_venues):
+            response.append(f"{medals[idx]} {venue['venue']}")
+            response.append(f"📍 {venue['city']}, {venue['state']}")
+            response.append(f"📅 Most Recent – {venue['most_recent']}")
+            response.append(f"🗓️ Events – {venue['num_events']}")
+            response.append(f"📈 Avg. Registrants – {venue['avg_gross']}")
+            response.append(f"💰 Avg. CPA – {venue['avg_cpa']}")
+            response.append(f"💵 Avg. CPR – {venue['avg_cpr']}")
+            response.append(f"📉 Attendance Rate – {venue['attendance_rate']}")
+            response.append(f"🎯 Fulfillment % – {venue['fulfillment_pct']}")
+            response.append(f"📸 Image Allowed – {venue['image_allowed']}")
             response.append(f"⚠️ Disclosure Needed – {venue['disclosure_needed']}")
             response.append(f"⚠️ Recency – {venue['used_recently']}")
             response.append(f"🕒 Best Times – {venue['best_times']} on {venue['best_days']}")
-            response.append("---\n")
             response.append("---")
 
         response.append("**💬 Recommendation Summary:**")
@@ -287,64 +189,12 @@ async def run_vor(request: VORRequest):
 
         final_report = "\n".join(response)
         logger.info(f"VOR response:\n{final_report}")
+        return {"report": final_report}
 
+    except Exception as e:
+        logger.exception("Failed to process VOR.")
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
 
-
-
-@app.get("/market-health", response_class=HTMLResponse)
-async def market_health(zip: Optional[str] = None, city: Optional[str] = None, state: Optional[str] = None, topic: Optional[str] = None):
-    reference_date = pd.Timestamp.today()
-
-    """
-    return HTMLResponse(html)
-
-
-@app.get("/predict-cpr", response_class=HTMLResponse)
-async def predict_cpr(zip: Optional[str] = None, city: Optional[str] = None, state: Optional[str] = None, topic: Optional[str] = None):
-    reference_date = pd.Timestamp.today()
-    topic_full = TOPIC_MAP.get(topic.upper()) if topic else None
-    topic_upper = topic.upper() if topic else None
-    topic_full = TOPIC_MAP.get(topic_upper) if topic_upper else None
-
-    if zip:
-        zip_str = str(zip).strip().zfill(5)
-
-
-    fatigue_penalty = count_30 * 0.1
-    rest_boost = min(days_since_last / 30, 1.0) * 0.2
-topic_factor = {"EP": 0.9, "SS": 0.85, "TIR": 1.15}.get(topic.upper(), 1.0) if topic else 1.0
-
-    topic_factor = {"EP": 0.9, "SS": 0.85, "TIR": 1.15}.get(topic_upper, 1.0) if topic else 1.0
-    delta = rest_boost - fatigue_penalty
-    predicted_cpr = last_cpr * (1 + delta) * topic_factor
-
-    trend_icon = "📉" if delta < 0 else "📈"
-    trend_text = "Expected to decrease" if delta < 0 else "Expected to increase"
-
-    html = f"""
-    <h2>Predicted CPR for {area_label}</h2>
-    <p><b>Topic:</b> {topic or 'All Topics'}</p>
-    <p><b>Most Recent Event:</b> {last_date.strftime('%Y-%m-%d')}</p>
-    <p><b>Days Since Last Event:</b> {days_since_last} days</p>
-    <p><b>Events in Last 30 Days:</b> {count_30}</p>
-    <p><b>Last Known CPR:</b> ${round(last_cpr, 2)}</p>
-    <h3>{trend_icon} Predicted CPR: ${round(predicted_cpr, 2)}</h3>
-    <p>{trend_text} by approx. {round(delta * 100, 1)}%</p>
-    """
-    return HTMLResponse(html)
-
-@app.get("/market.html", response_class=HTMLResponse)
-async def serve_market():
-    with open("static/market.html", "r") as f:
-        return HTMLResponse(content=f.read(), status_code=200)
-
-@app.get("/predict.html", response_class=HTMLResponse)
-async def serve_predict():
-    with open("static/predict.html", "r") as f:
-        return HTMLResponse(content=f.read(), status_code=200)
-
-app.mount("/", StaticFiles(directory="static", html=True), name="static")
 
 
 
