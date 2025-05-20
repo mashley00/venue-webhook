@@ -225,6 +225,7 @@ async def ping():
 # Mount static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+print("✅ App loaded successfully")
 
 
 
