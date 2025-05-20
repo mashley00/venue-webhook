@@ -219,6 +219,10 @@ async def serve_predict():
 # Mount static folder
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+@app.get("/ping")
+async def ping():
+    return {"status": "ok"}
+
 
 
 
