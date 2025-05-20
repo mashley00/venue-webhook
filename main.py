@@ -214,7 +214,7 @@ async def serve_predict():
     return FileResponse("static/predict.html")
 
 # Mount static folder
-app.mount("/static", StaticFiles(directory="static", html=True), name="static")
+app.mount("/", StaticFiles(directory="static", html=True), name="static")
 
 
 
