@@ -38,7 +38,14 @@ try:
 except Exception as e:
     logger.exception("Error loading dataset.")
 
+def get_similar_cities(input_city, state, threshold=75):
+    normalized_city = input_city.strip().lower()
+    candidates = df[df['state'].str.strip().str.upper() == state]['city'].dropna().unique()
+    matches = [
+        city for city in candidates
         if fuzz.token_set_ratio(normalized_city, city.strip().lower()) >= threshold
+    ]
+    return list(set(matches))
     ]
     return list(set(matches))
 
