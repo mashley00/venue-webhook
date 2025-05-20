@@ -1,20 +1,22 @@
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Union, Optional
+from fuzzywuzzy import fuzz
+from datetime import datetime
 import pandas as pd
 import logging
-from datetime import datetime, timedelta
-from fuzzywuzzy import fuzz
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
 
-# === Logging setup ===
+# Logging setup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("VenueGPT")
 
-# === FastAPI setup ===
+# Initialize app
 app = FastAPI(title="Venue Optimization API", version="1.0.0")
+
+# Enable CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -22,37 +24,39 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-# === Load Data ===
+# Load dataset
 CSV_URL = "https://acquireup-venue-data.s3.us-east-2.amazonaws.com/all_events_23_25.csv"
+
 try:
     df = pd.read_csv(CSV_URL, encoding="utf-8")
     df.columns = df.columns.str.lower().str.replace(" ", "_").str.replace(r"[^\w\s]", "", regex=True)
     df['event_date'] = pd.to_datetime(df['event_date'], errors='coerce')
     df['event_day'] = df['event_date'].dt.day_name()
-    df['event_time'] = df['event_time'].str.strip()
-
-    if 'zip_code' not in df.columns:
+    df['event_time'] = df['event_time'].astype(str).str.strip()
+    if 'zip_code' in df.columns:
+        df['zip_code'] = df['zip_code'].fillna('').astype(str).str.strip().str.zfill(5)
+    else:
         df['zip_code'] = ''
-    df['zip_code'] = df['zip_code'].fillna('').astype(str).str.strip().str.zfill(5)
-
     logger.info(f"Loaded dataset: {df.shape}")
 except Exception as e:
     logger.exception("Error loading dataset.")
     raise e
 
-# === Constants and Helpers ===
+# Topic mapping
 TOPIC_MAP = {
     "TIR": "taxes_in_retirement_567",
     "EP": "estate_planning_567",
     "SS": "social_security_567"
 }
 
+# Request model
 class VORRequest(BaseModel):
     topic: str
     city: str
     state: Optional[str] = None
     miles: Optional[Union[int, float]] = 6.0
 
+# Helper functions
 def is_true(val):
     return str(val).strip().upper() == "TRUE"
 
@@ -65,7 +69,7 @@ def get_similar_cities(input_city, state, threshold=75):
     ]
     return list(set(matches))
 
-# === VOR Endpoint ===
+# VOR endpoint
 @app.post("/vor")
 async def run_vor(request: VORRequest):
     logger.info(f"Received VOR request: {request.dict()}")
@@ -77,7 +81,7 @@ async def run_vor(request: VORRequest):
 
         if request.city.isdigit() and len(request.city) == 5:
             zip_str = str(request.city).strip().zfill(5)
-            filtered = df[(df['topic'] == topic) & (df['zip_code'].str.zfill(5) == zip_str)]
+            filtered = df[(df['topic'] == topic) & (df['zip_code'].astype(str).str.strip().str.zfill(5) == zip_str)]
             display_city = filtered.iloc[0]['city'] if not filtered.empty else request.city
             display_state = filtered.iloc[0]['state'] if not filtered.empty else ""
         else:
@@ -169,6 +173,7 @@ async def run_vor(request: VORRequest):
         response.append("**📊 Top Venues:**")
         response.append(f"🔎 Included city variations: {display_city}")
         medals = ["🥇", "🥈", "🥉", "🏅"]
+
         for idx, venue in enumerate(top_venues):
             response.append(f"{medals[idx]} {venue['venue']}")
             response.append(f"📍 {venue['city']}, {venue['state']}")
@@ -199,9 +204,18 @@ async def run_vor(request: VORRequest):
         logger.exception("Failed to process VOR.")
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
 
-from fastapi.staticfiles import StaticFiles
+# Serve static HTML files
+@app.get("/market.html", response_class=HTMLResponse)
+async def serve_market():
+    return FileResponse("static/market.html")
 
-app.mount("/", StaticFiles(directory="static", html=True), name="static")
+@app.get("/predict.html", response_class=HTMLResponse)
+async def serve_predict():
+    return FileResponse("static/predict.html")
+
+# Mount static folder
+app.mount("/static", StaticFiles(directory="static", html=True), name="static")
+
 
 
 
