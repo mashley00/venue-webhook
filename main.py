@@ -205,7 +205,7 @@ async def run_vor(request: VORRequest):
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
 
 # Serve static HTML files
-from fastapi.responses import FileResponse
+from fastapi.responses import HTMLResponse, FileResponse
 
 @app.get("/market.html", response_class=HTMLResponse)
 async def serve_market():
@@ -215,13 +215,15 @@ async def serve_market():
 async def serve_predict():
     return FileResponse("static/predict.html")
 
+@app.get("/ping")
+async def ping():
+    return {"status": "ok"}
+
+
 
 # Mount static folder
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-@app.get("/ping")
-async def ping():
-    return {"status": "ok"}
 
 
 
