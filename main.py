@@ -99,7 +99,11 @@ try:
     df['event_date'] = pd.to_datetime(df['event_date'], errors='coerce')
     df['event_day'] = df['event_date'].dt.day_name()
     df['event_time'] = df['event_time'].str.strip()
-    df['zip_code'] = df.get('zip_code', '').fillna('').astype(str).str.strip().str.zfill(5)
+# ✅ Safe ZIP column handling
+if 'zip_code' not in df.columns:
+    df['zip_code'] = ''
+df['zip_code'] = df['zip_code'].fillna('').astype(str).str.strip().str.zfill(5)
+
     logger.info(f"Loaded dataset: {df.shape}")
 except Exception as e:
     logger.exception("Error loading dataset.")
