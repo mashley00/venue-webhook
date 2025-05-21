@@ -175,7 +175,7 @@ async def run_vor(request: VORRequest):
         # ✅ Add two blank lines before Top Venues section
         response.append("<br><br>**📊 Top Venues:**")
 
-        response.append(f"🔎 Included city variations: {display_city}")
+        response.append(f"🔎 Included city variations: {display_city}<br><br>")
         medals = ["🥇", "🥈", "🥉", "🏅"]
         for idx, venue in enumerate(top_venues):
             response.append(f"{medals[idx]} {venue['venue']}")
