@@ -77,43 +77,60 @@
     <span id="resultText">Waiting for input...</span>
   </div>
 
-  <script>
-    document.getElementById("vorForm").addEventListener("submit", async function (e) {
-      e.preventDefault();
+<script>
+  document.getElementById('vorForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const topic = document.getElementById('topic').value.trim();
+    const city = document.getElementById('city').value.trim();
+    const state = document.getElementById('state').value.trim();
 
-      const topic = document.getElementById("topic").value;
-      const city = document.getElementById("city").value;
-      const state = document.getElementById("state").value;
-      const output = document.getElementById("resultText");
+    const responseDiv = document.getElementById('output');
+    responseDiv.innerHTML = 'Loading...';
 
-      output.innerText = "⏳ Processing request...";
+    try {
+      const response = await fetch('/vor', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topic, city, state })
+      });
 
-      const body = {
-        topic: topic,
-        city: city,
-        state: state
-      };
+      const data = await response.json();
 
-      try {
-        const response = await fetch("/vor", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify(body)
-        });
-
-        const data = await response.json();
-
-        if (!response.ok) {
-          output.innerText = `❌ Error: ${data.detail}`;
-        } else {
-          output.innerText = data.report;
-        }
-      } catch (error) {
-        output.innerText = `🚨 Server error: ${error.message}`;
+      if (!response.ok) {
+        responseDiv.innerHTML = `<span style="color:red;"><strong>Error:</strong> ${data.detail}</span>`;
+        return;
       }
-    });
-  </script>
+
+      const lines = data.report.split('\n');
+      let html = '';
+      for (let i = 0; i < lines.length; i++) {
+        let line = lines[i];
+
+        // Bold venue names
+        if (line.match(/^🥇|^🥈|^🥉|^🏅/)) {
+          line = `<strong>${line}</strong>`;
+        }
+
+        // Add line breaks between venues
+        if (line === '---') {
+          html += '<hr style="margin:12px 0;">';
+          continue;
+        }
+
+        // Add space before summary section
+        if (line.includes('**💬 Recommendation Summary:**')) {
+          html += '<br><br>';
+        }
+
+        html += line + '<br>';
+      }
+
+      responseDiv.innerHTML = html;
+    } catch (err) {
+      responseDiv.innerHTML = `<span style="color:red;"><strong>Server error:</strong> ${err.message}</span>`;
+    }
+  });
+</script>
+
 </body>
 </html>
