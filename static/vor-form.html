@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Venue Optimization Request</title>
+  <style>
+    body {
+      font-family: "Helvetica Neue", sans-serif;
+      padding: 2rem;
+      background: #f9f9f9;
+    }
+    h1 {
+      color: #111;
+      font-size: 2rem;
+    }
+    label {
+      font-weight: bold;
+    }
+    input, select, button {
+      margin: 5px 0 15px;
+      padding: 8px;
+      width: 250px;
+      font-size: 1rem;
+    }
+    button {
+      background: #4CAF50;
+      color: white;
+      border: none;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #45a049;
+    }
+    .output {
+      margin-top: 30px;
+      padding: 20px;
+      background: #fff;
+      border: 1px solid #ccc;
+      white-space: pre-line;
+    }
+    nav {
+      margin-bottom: 20px;
+    }
+    nav a {
+      margin-right: 20px;
+      text-decoration: none;
+      color: #0077cc;
+    }
+  </style>
+</head>
+<body>
+
+  <img src="/static/acquireup-logo.png" alt="AcquireUp Logo" height="50" />
+
+  <nav>
+    <a href="/market.html">📊 Market Health</a>
+    <a href="/predict.html">📈 Predict CPR</a>
+  </nav>
+
+  <h1>📍 Venue Optimization Request</h1>
+
+  <form id="vorForm">
+    <label for="topic">Seminar Topic (TIR, EP, SS):</label><br>
+    <input type="text" id="topic" name="topic" placeholder="e.g. TIR" required><br>
+
+    <label for="city">City:</label><br>
+    <input type="text" id="city" name="city" placeholder="e.g. Troy" required><br>
+
+    <label for="state">State (e.g. TX):</label><br>
+    <input type="text" id="state" name="state" placeholder="e.g. MI" required><br>
+
+    <button type="submit">📌 Run VOR</button>
+  </form>
+
+  <div class="output" id="reportOutput">
+    <strong>📊 Report Output:</strong><br>
+    <span id="resultText">Waiting for input...</span>
+  </div>
+
+  <script>
+    document.getElementById("vorForm").addEventListener("submit", async function (e) {
+      e.preventDefault();
+
+      const topic = document.getElementById("topic").value;
+      const city = document.getElementById("city").value;
+      const state = document.getElementById("state").value;
+      const output = document.getElementById("resultText");
+
+      output.innerText = "⏳ Processing request...";
+
+      const body = {
+        topic: topic,
+        city: city,
+        state: state
+      };
+
+      try {
+        const response = await fetch("/vor", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(body)
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          output.innerText = `❌ Error: ${data.detail}`;
+        } else {
+          output.innerText = data.report;
+        }
+      } catch (error) {
+        output.innerText = `🚨 Server error: ${error.message}`;
+      }
+    });
+  </script>
+</body>
+</html>
