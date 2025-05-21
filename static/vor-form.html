@@ -1,136 +1,134 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="UTF-8" />
   <title>Venue Optimization Request</title>
+  <link rel="stylesheet" href="/static/style.css" />
   <style>
     body {
-      font-family: "Helvetica Neue", sans-serif;
-      padding: 2rem;
-      background: #f9f9f9;
+      font-family: Arial, sans-serif;
+      background: #fafafa;
+      margin: 30px;
     }
     h1 {
-      color: #111;
-      font-size: 2rem;
+      font-size: 2em;
     }
     label {
+      display: block;
+      margin: 10px 0 5px;
       font-weight: bold;
     }
-    input, select, button {
-      margin: 5px 0 15px;
+    input[type="text"] {
+      width: 300px;
       padding: 8px;
-      width: 250px;
-      font-size: 1rem;
+      font-size: 1em;
+      background: #e8f0fe;
+      border: 1px solid #ccc;
+      border-radius: 4px;
     }
     button {
-      background: #4CAF50;
+      background-color: #4CAF50;
       color: white;
+      padding: 10px 20px;
+      font-size: 1em;
       border: none;
+      border-radius: 5px;
+      margin-top: 20px;
       cursor: pointer;
     }
     button:hover {
-      background: #45a049;
+      background-color: #45a049;
     }
-    .output {
+    #report {
       margin-top: 30px;
       padding: 20px;
       background: #fff;
-      border: 1px solid #ccc;
+      border: 1px solid #ddd;
+      border-radius: 5px;
       white-space: pre-line;
     }
     nav {
-      margin-bottom: 40px;
+      margin-bottom: 20px;
     }
     nav a {
-      margin-right: 20px;
+      margin-right: 15px;
       text-decoration: none;
-      color: #0077cc;
+      font-weight: bold;
+    }
+    nav a:hover {
+      text-decoration: underline;
     }
   </style>
 </head>
 <body>
-
-  <img src="/static/acquireup-logo.png" alt="AcquireUp Logo" height="50" />
+  <img src="/static/acquireup-logo.png" alt="AcquireUp Logo" style="height: 40px;" />
 
   <nav>
-    <a href="/market.html">📊 Market Health</a>
-    <a href="/predict.html">📈 Predict CPR</a>
+    <a href="/static/market.html">📊 Market Health</a>
+    <a href="/static/predict.html">📈 Predict CPR</a>
   </nav>
 
   <h1>📍 Venue Optimization Request</h1>
 
-  <form id="vorForm">
-    <label for="topic">Seminar Topic (TIR, EP, SS):</label><br>
-    <input type="text" id="topic" name="topic" placeholder="e.g. TIR" required><br>
+  <form id="vor-form">
+    <label for="topic">Seminar Topic (TIR, EP, SS):</label>
+    <input type="text" id="topic" name="topic" required />
 
-    <label for="city">City:</label><br>
-    <input type="text" id="city" name="city" placeholder="e.g. Troy" required><br>
+    <label for="city">City:</label>
+    <input type="text" id="city" name="city" required />
 
-    <label for="state">State (e.g. TX):</label><br>
-    <input type="text" id="state" name="state" placeholder="e.g. MI" required><br>
+    <label for="state">State (e.g. TX):</label>
+    <input type="text" id="state" name="state" required />
 
     <button type="submit">📌 Run VOR</button>
   </form>
 
-  <div class="output" id="reportOutput">
-    <strong>📊 Report Output:</strong><br>
-    <span id="resultText">Waiting for input...</span>
+  <div id="report">
+    <strong>📊 Report Output:</strong><br><br>
+    <em>Waiting for input...</em>
   </div>
 
-<script>
-  document.getElementById('vorForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const topic = document.getElementById('topic').value.trim();
-    const city = document.getElementById('city').value.trim();
-    const state = document.getElementById('state').value.trim();
+  <script>
+    document.getElementById('vor-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const output = document.getElementById('report');
+      output.innerHTML = "<em>Loading...</em>";
 
-    const responseDiv = document.getElementById('output');
-    responseDiv.innerHTML = 'Loading...';
+      const topic = document.getElementById('topic').value.trim();
+      const city = document.getElementById('city').value.trim();
+      const state = document.getElementById('state').value.trim();
 
-    try {
-      const response = await fetch('/vor', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ topic, city, state })
-      });
+      try {
+        const res = await fetch("/vor", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ topic, city, state })
+        });
 
-      const data = await response.json();
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail);
 
-      if (!response.ok) {
-        responseDiv.innerHTML = `<span style="color:red;"><strong>Error:</strong> ${data.detail}</span>`;
-        return;
+        const lines = data.report.split("\n");
+        const html = lines.map((line) => {
+          // Bold venue lines
+          if (line.match(/^🏛️|^🥇|^🥈|^🥉|^🏅/)) {
+            line = `<strong>${line}</strong>`;
+          }
+
+          // Add spacing between venue sections and summary
+          if (line.match(/^🥇|^🥈|^🥉|^🏅|^---|^\*\*💬/)) {
+            return `<br>${line}<br>`;
+          }
+
+          return line;
+        }).join("<br>");
+
+        output.innerHTML = html;
+      } catch (err) {
+        output.innerHTML = `<span style="color: red;">❌ ${err.message}</span>`;
       }
-
-      const lines = data.report.split('\n');
-      let html = '';
-      for (let i = 0; i < lines.length; i++) {
-        let line = lines[i];
-
-        // Bold venue names
-        if (line.match(/^🥇|^🥈|^🥉|^🏅/)) {
-          line = `<strong>${line}</strong>`;
-        }
-
-        // Add line breaks between venues
-        if (line === '---') {
-          html += '<hr style="margin:12px 0;">';
-          continue;
-        }
-
-        // Add space before summary section
-        if (line.includes('**💬 Recommendation Summary:**')) {
-          html += '<br><br>';
-        }
-
-        html += line + '<br>';
-      }
-
-      responseDiv.innerHTML = html;
-    } catch (err) {
-      responseDiv.innerHTML = `<span style="color:red;"><strong>Server error:</strong> ${err.message}</span>`;
-    }
-  });
-</script>
-
+    });
+  </script>
 </body>
 </html>
+
