@@ -166,12 +166,15 @@ async def run_vor(request: VORRequest):
         venues_sorted = sorted(venues, key=lambda x: x["score"], reverse=True)
         top_venues = venues_sorted[:4]
         most_recent_venue = filtered.sort_values("event_date", ascending=False).iloc[0]
-
+        
         response = []
         response.append("🕵️ Most Recently Used Venue in City:")
-        response.append(f"🏛️ {most_recent_venue['venue']}")
+        response.append(f"🏛️ <strong>{most_recent_venue['venue']}</strong>")
         response.append(f"📅 {most_recent_venue['event_date'].strftime('%Y-%m-%d')}")
-        response.append("**📊 Top Venues:**")
+
+        # ✅ Add two blank lines before Top Venues section
+        response.append("<br><br>**📊 Top Venues:**")
+
         response.append(f"🔎 Included city variations: {display_city}")
         medals = ["🥇", "🥈", "🥉", "🏅"]
         for idx, venue in enumerate(top_venues):
