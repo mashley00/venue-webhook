@@ -104,16 +104,28 @@ async def run_vor(request: VORRequest):
         if filtered.empty:
             raise HTTPException(status_code=404, detail="No matching events found.")
 
-        today = pd.Timestamp.today()
-        filtered = filtered.copy()
+        # Ensure key numeric fields are numeric
+        for col in ["attended_hh", "gross_registrants", "registration_max", "fb_cpr"]:
+            filtered[col] = pd.to_numeric(filtered[col], errors="coerce")
         filtered["attendance_rate"] = filtered["attended_hh"] / filtered["gross_registrants"]
         filtered["fulfillment_pct"] = filtered["attended_hh"] / (filtered["registration_max"] / 2.4)
+        filtered["attendance_rate"] = filtered["attendance_rate"].fillna(0)
+        filtered["fulfillment_pct"] = filtered["fulfillment_pct"].fillna(0)
+
+        # CPA logic with fallback
         filtered["cpa"] = filtered["fb_cpr"] / filtered["attendance_rate"]
-        filtered["score"] = (1 / filtered["cpa"] * 0.5) + (filtered["fulfillment_pct"] * 0.3) + (filtered["attendance_rate"] * 0.2)
+        filtered["cpa"] = filtered["cpa"].replace([float("inf"), -float("inf")], pd.NA).fillna(999)
+
+        filtered["score"] = (
+            (1 / filtered["cpa"].replace(0, pd.NA)) * 0.5 +
+            filtered["fulfillment_pct"] * 0.3 +
+            filtered["attendance_rate"] * 0.2
+        ).fillna(0)
         filtered["score"] = filtered["score"] * 40
 
         venues = []
         preferred_times = ["11:00", "11:30", "18:00", "18:30"]
+        today = pd.Timestamp.today()
 
         for venue_name, group in filtered.groupby("venue"):
             group_sorted = group.sort_values("event_date", ascending=False)
@@ -166,15 +178,13 @@ async def run_vor(request: VORRequest):
         venues_sorted = sorted(venues, key=lambda x: x["score"], reverse=True)
         top_venues = venues_sorted[:4]
         most_recent_venue = filtered.sort_values("event_date", ascending=False).iloc[0]
-        
+
         response = []
         response.append("🕵️ Most Recently Used Venue in City:")
         response.append(f"🏛️ <strong>{most_recent_venue['venue']}</strong>")
         response.append(f"📅 {most_recent_venue['event_date'].strftime('%Y-%m-%d')}")
 
-        # ✅ Add two blank lines before Top Venues section
         response.append("<br><br>**📊 Top Venues:**")
-
         response.append(f"🔎 Included city variations: {display_city}<br><br>")
         medals = ["🥇", "🥈", "🥉", "🏅"]
         for idx, venue in enumerate(top_venues):
